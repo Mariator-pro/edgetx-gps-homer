@@ -429,12 +429,15 @@ end
 -- `skipAng` (optional): a cardinal that would touch the H badge drawn there
 -- (half letter + badge radius) is left out; in Nose up the nose mark at 0
 -- deg does the same.
+-- `compact`: the bare band (no letters, ticks or nose mark) for boxes too
+-- low for the letter margin, so the ring can use the whole box.
 local NORTH_UP = false
-local function drawCompass(cx, cy, R, rotDeg, skipAng)
+local function drawCompass(cx, cy, R, rotDeg, skipAng, compact)
   drawRing(cx, cy, R)
   local tr = R + math.floor(fontH(SMLSIZE) / 2)   -- letters outside the ring
-  if not NORTH_UP then skipAng = 0; drawNoseMark(cx, cy, tr) end
   local minSep = math.deg((textW("W", SMLSIZE) / 2 + fontH(SMLSIZE) / 2) / tr)
+  if compact then return tr end
+  if not NORTH_UP then skipAng = 0; drawNoseMark(cx, cy, tr) end
   for i, c in ipairs(CARDINALS) do
     local ang  = (i - 1) * 90 + rotDeg
     local diff = skipAng and math.abs(((ang - skipAng + 540) % 360) - 180) or 999
@@ -467,12 +470,16 @@ end
 -- course. 2 North up = map style, the ring is fixed, the arrow is the course
 -- and an "H" outside the ring marks the bearing to home; a cardinal letter
 -- that would sit under the H is left out.
-local function drawCompassArrow(cx, cy, R, d)
+local function drawCompassArrow(cx, cy, R, d, compact)
   local r = math.floor(R * 0.55)
   if NORTH_UP then
-    local tr = drawCompass(cx, cy, R, 0, d.bearingToHome)
+    local tr = drawCompass(cx, cy, R, 0, d.bearingToHome, compact)
     drawArrow(cx, cy, r, d.course or 0, COLORS.fg)
-    if d.bearingToHome then
+    if d.bearingToHome and compact then
+      -- No room for the badge outside: a filled dot on the band marks home.
+      local hx, hy = rot(cx, cy, R - math.floor(RING_W / 2), d.bearingToHome, 0)
+      lcd.drawFilledCircle(hx, hy, RING_W + sx(1), COLORS.fg)
+    elseif d.bearingToHome then
       -- H in a thin circle so the marker reads as a badge, not a fifth letter.
       if lcd.drawCircle then
         local hx, hy = rot(cx, cy, tr, d.bearingToHome, 0)
@@ -482,9 +489,20 @@ local function drawCompassArrow(cx, cy, R, d)
       drawRingText(cx, cy, tr, d.bearingToHome, "H", COLORS.fg)
     end
   else
-    drawCompass(cx, cy, R, -(d.course or 0))
+    drawCompass(cx, cy, R, -(d.course or 0), nil, compact)
     drawArrow(cx, cy, r, d.rel, COLORS.fg)
   end
+end
+
+-- Ring radius for a W x areaH box, capped at rCap: with the letters outside
+-- when they fit (ringMargin), else compact, filling the box up to sx(2)
+-- (room for the home dot). Below sx(12) there is no ring at all.
+-- Returns R, compact.
+local function ringFit(W, areaH, rCap)
+  local half = math.floor(math.min(W, areaH) / 2)
+  local R    = math.min(half - ringMargin(), rCap)
+  if R >= sx(12) then return R, false end
+  return math.min(half - sx(2), rCap), true
 end
 
 -- ---------------------------------------------------------------------------
@@ -497,15 +515,13 @@ local TIER_TOL = sx(4)
 local GAP      = sx(4)
 
 -- Sats block (top of the list, the primary value): the count in MIDSIZE
--- (default font when the height is short), "SATS" caption and the signal bars
--- beside it on its baseline. Below it the value list in SMLSIZE: one row per
--- metric, label left (muted), value+unit right-aligned so the numbers line up.
--- Rows in display order; `drop` is the order they give way when the zone is
--- too low (SPD first).
+-- (default font in MEDIUM), "SATS" caption and the signal bars beside it on
+-- its baseline. Below it the value list in SMLSIZE: one row per metric, label
+-- left (muted), value+unit right-aligned so the numbers line up.
 local LIST_ROWS = {
-  { key = "alt",  label = "ALT",  unit = "m",    ref = "9999",  drop = 2 },
-  { key = "dist", label = "DIST", unit = "m",    ref = "9999",  drop = 3 },
-  { key = "spd",  label = "SPD",  unit = "km/h", ref = "999.9", drop = 1 },
+  { key = "alt",  label = "ALT",  unit = "m",    ref = "9999"  },
+  { key = "dist", label = "DIST", unit = "m",    ref = "9999"  },
+  { key = "spd",  label = "SPD",  unit = "km/h", ref = "999.9" },
 }
 local LABEL_GAP = sx(6)
 -- Header band height plus the gap to the sats block (sx(1), anchored so the
@@ -552,35 +568,9 @@ local function listColW(bf)
   end
   return math.max(lw + LABEL_GAP + vw, satsBlockW(bf))
 end
--- Tight pitch (fit check and fallback).
-local function listRowH() return fontH(LIST_FONT) - sx(2) end
--- Row pitch actually drawn: 20 % of the height under the header (rows spread
--- over the tile like the sibling widgets' info rows), unless that would cost a
--- row that the tight pitch keeps.
-local function listPitch(bf, H)
-  local wide = math.max(listRowH(), math.floor(H * 0.20))
-  if math.floor((H - satsBlockH(bf)) / wide) < math.min(#LIST_ROWS, math.floor((H - satsBlockH(bf)) / listRowH())) then
-    return listRowH()
-  end
-  return wide
-end
-
--- Sats font: MIDSIZE; default font when the block plus one row would not fit
--- the height or the column would take more than half the width.
-local function satsFont(W, H)
-  if listColW(MIDSIZE) > W * 0.5 or satsBlockH(MIDSIZE) + listRowH() > H then return 0 end
-  return MIDSIZE
-end
-
--- Rows that fit under the sats block, dropped by priority, in display order.
-local function listRowsFor(bf, H)
-  local n = math.min(#LIST_ROWS, math.floor((H - satsBlockH(bf)) / listRowH()))
-  local rows = {}
-  for _, r in ipairs(LIST_ROWS) do
-    if r.drop > #LIST_ROWS - n then rows[#rows + 1] = r end
-  end
-  return rows
-end
+-- Row band: 20 % of the height under the header, at least one SMLSIZE line
+-- (the sibling widgets' info-row band), so the rows spread over the tile.
+local function listPitch(H) return math.max(fontH(LIST_FONT), math.floor(H * 0.20)) end
 
 local function listValue(r, d)
   if r.key == "dist" then return fmtDist(d.distanceM) end
@@ -597,24 +587,25 @@ local function satsColor(sats, fixLost)
   return COLORS.accent
 end
 
--- Sats block: count, caption right behind it (moves with the digit count),
--- bars right-aligned with the value column.
+-- Sats block: count, caption LABEL_GAP behind it (moves with the digit count,
+-- the same gap the sibling widgets keep behind their big value), bars
+-- right-aligned with the value column.
 local function drawSatsBlock(x0, y, colW, bf, d)
   local col  = satsColor(d.sats, d.fixLost)
   local base = y + fontH(bf)
   local smlH = fontH(SMLSIZE)
   local txt  = d.sats and tostring(d.sats) or "--"
   dtext(x0, y, txt, col, bf)
-  dtext(x0 + textW(txt, bf) + sx(3), base - smlH, "SATS", COLORS.muted, SMLSIZE)
+  dtext(x0 + textW(txt, bf) + LABEL_GAP, base - smlH, "SATS", COLORS.muted, SMLSIZE)
   drawSatsBars(x0 + colW - BARS_W, base - smlH, smlH - sx(2), d.sats, col)
   return satsBlockH(bf)
 end
 
--- Rows are anchored to the bottom edge (`bottom` = tile bottom, pad from the
--- zone edge) so the last value always sits flush with the edge inset; spare
+-- Rows sit in equal bands stacked up from the bottom edge (`bottom` = tile
+-- bottom, pad from the zone edge), each row's text centred in its band; spare
 -- height opens up between the sats block and the list.
 local function drawList(x0, bottom, colW, rows, rowH, d)
-  local y    = bottom - fontH(LIST_FONT) - (#rows - 1) * rowH
+  local y = bottom - #rows * rowH + math.floor((rowH - fontH(LIST_FONT)) / 2)
   for _, r in ipairs(rows) do
     local v = listValue(r, d)
     dtext(x0, y, r.label, COLORS.muted, LIST_FONT)
@@ -623,15 +614,31 @@ local function drawList(x0, bottom, colW, rows, rowH, d)
   end
 end
 
--- The list layout fits when the arrow box beside the list keeps a usable
--- diameter (sx(40)) and the sats block plus one row fit under the header.
--- Returns the verdict plus the values drawActive needs, so both use the same numbers.
-local function activeFitsList(W, H)
-  local Hl   = H - headerH()
-  local bf   = satsFont(W, Hl)
-  local boxW = W - listColW(bf) - GAP
-  local ok   = boxW >= sx(40) - TIER_TOL and Hl >= satsBlockH(bf) + listRowH() - TIER_TOL
-  return ok, bf, Hl
+-- Tier thresholds. Checks are in absolute pixels because fonts do NOT scale
+-- with S (only positions do). The reference texts and height stacks are the
+-- ones the sibling widgets use, so every tile on a screen switches tier at the
+-- same zone size.
+local function activeFitsFull(W, H)
+  local gap   = sx(4)
+  local gridW = textW("RSS -000 dBm", SMLSIZE) + gap
+              + textW("FM Angle?", SMLSIZE) + gap
+              + textW("LQ 100 %", SMLSIZE) + sx(2)
+  local smlH  = fontH(SMLSIZE)
+  local hdrH  = smlH                            -- compact header (one text line, no padding)
+  local needH = hdrH + sx(1)                    -- header + gap to content
+              + fontH(MIDSIZE) + sx(1) + sx(12) -- big value band + gap + min bar
+              + sx(3) + 2 * smlH                -- gap + two info rows
+  return W >= gridW - TIER_TOL and H >= needH - TIER_TOL
+end
+
+-- MEDIUM spreads header + 4 rows as evenly-spaced lines, so it holds as long
+-- as that pitch keeps a compressed (smlH - sx(5)); below that it drops to SMALL.
+local function activeFitsMedium(W, H)
+  local smlH  = fontH(SMLSIZE)
+  local needH = smlH + 4 * (smlH - sx(5))   -- header + four rows at a compressed pitch
+  local needW = textW("RSS -000 dBm", SMLSIZE) + sx(8)
+              + textW("MODE 150Hz", SMLSIZE)
+  return W >= needW - TIER_TOL and H >= needH - TIER_TOL
 end
 
 -- Direction box: the arrow (or the absolute home direction when the course is
@@ -646,16 +653,24 @@ local function drawRingStatus(x0, top, W, boxH, d, rCap, small, txt, short, col,
   local cx    = x0 + math.floor(W / 2)
   local smlH  = fontH(SMLSIZE)
   local areaH = boxH - smlH - sx(2)
-  local R     = math.min(math.floor(math.min(W, areaH) / 2) - ringMargin(), rCap)
-  if not small and R >= sx(12) then
-    local rcy = top + math.floor(areaH / 2)
-    drawCompass(cx, rcy, R, NORTH_UP and 0 or -(d.course or 0))
-    if house then drawHouse(cx, rcy, math.floor(R * 0.55), COLORS.fg) end
-    dtext(x0 + math.floor((W - textW(txt, SMLSIZE)) / 2), top + areaH + sx(2), txt, col, SMLSIZE)
-  else
+  local R, compact = ringFit(W, areaH, rCap)
+  if small then
     local f = fitFont("NO HOME", math.floor(W * 0.95), boxH, DBLSIZE)
     dtext(x0 + math.floor((W - textW(short, f)) / 2), top + math.floor((boxH - fontH(f)) / 2), short, col, f)
+    return
   end
+  -- Status as the bottom line of the box (level with the last list row);
+  -- above it the ring when it has room, else only the house (AT HOME).
+  if R >= sx(12) then
+    local rcy = top + math.floor(areaH / 2)
+    drawCompass(cx, rcy, R, NORTH_UP and 0 or -(d.course or 0), nil, compact)
+    if house then drawHouse(cx, rcy, math.floor(R * 0.55), COLORS.fg) end
+  else
+    if textW(txt, SMLSIZE) > W then txt = short end
+    local hr = math.floor(math.min(W, areaH) / 2 * 0.55)
+    if house and hr >= sx(8) then drawHouse(cx, top + math.floor(areaH / 2), hr, COLORS.fg) end
+  end
+  dtext(x0 + math.floor((W - textW(txt, SMLSIZE)) / 2), top + boxH - smlH, txt, col, SMLSIZE)
 end
 
 local function drawDirection(x0, top, W, boxH, d, rCap, small)
@@ -677,13 +692,12 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
     local lbl  = relLabel(d.rel)
     local smlH = fontH(SMLSIZE)
     -- Compass ring + arrow inside (55 % of the ring), degree label at the box
-    -- bottom. Letters need ringMargin() around the ring.
-    local lm    = ringMargin()
+    -- bottom.
     local areaH = (lbl ~= "") and (boxH - smlH - sx(2)) or boxH
-    local R     = math.min(math.floor(math.min(W, areaH) / 2) - lm, rCap)
+    local R, compact = ringFit(W, areaH, rCap)
     if not small and R >= sx(12) then
       local rcy = top + math.floor(areaH / 2)
-      drawCompassArrow(cx, rcy, R, d)
+      drawCompassArrow(cx, rcy, R, d, compact)
       if lbl ~= "" then
         -- "HOME  30 R": caption muted, value fg, the pair centred under the ring.
         local cap = "HOME"
@@ -703,7 +717,7 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
       -- Label below the arrow (list layout); the arrow gives up the label height.
       r  = math.min(r, math.floor((boxH - smlH - sx(2)) / 2))
       cy = top + math.floor((boxH - smlH - sx(2)) / 2)
-      dtext(x0 + math.floor((W - textW(lbl, SMLSIZE)) / 2), cy + r + sx(2), lbl, COLORS.fg, SMLSIZE)
+      dtext(x0 + math.floor((W - textW(lbl, SMLSIZE)) / 2), top + boxH - smlH, lbl, COLORS.fg, SMLSIZE)
     elseif lbl ~= "" and textW("180 R", SMLSIZE) <= side then
       local f = fitFont("180 R", side, 2 * r)
       dtext(cx + r + GAP, cy - math.floor(fontH(f) / 2), lbl, COLORS.fg, f)
@@ -731,19 +745,51 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
   end
 end
 
--- The whole ACTIVE tile: header, value list left, arrow right. When the list
--- cannot sit beside a usable arrow, only the arrow remains (SMALL). Fit check
--- and draw share activeFitsList so the constants can never drift.
+-- FULL tier: header, sats block (MIDSIZE) over the three rows spread down to
+-- the bottom edge, ring + arrow in the rest of the width.
+local function drawActiveFull(W, H, x0, y0, d)
+  drawHeader(x0, y0)
+  local top  = y0 + headerH()
+  local Hl   = H - headerH()
+  local colW = listColW(MIDSIZE)
+  drawSatsBlock(x0, top, colW, MIDSIZE, d)
+  drawList(x0, y0 + H, colW, LIST_ROWS, listPitch(Hl), d)
+  local bx = x0 + colW + GAP
+  drawDirection(bx, top, x0 + W - bx, Hl, d, sx(60), false)
+end
+
+-- MEDIUM tier: header (line 0) plus four evenly spread lines: sats block,
+-- then ALT, DIST, SPD. The sats count takes the largest font (up to MIDSIZE)
+-- that fits half the width and half the span from line 1 to line 3, so it
+-- grows with the zone like the sibling widgets' big value. On a short zone
+-- the pitch is floored so the rows keep a readable spacing. Direction box
+-- right of the list.
+local function drawActiveMedium(W, H, x0, y0, d)
+  drawHeader(x0, y0)
+  local smlH    = fontH(SMLSIZE)
+  local span    = H - smlH
+  local minSpan = 4 * (smlH - sx(4))
+  if span < minSpan then span = minSpan end
+  local function rowY(i) return y0 + math.floor(i * span / 4 + 0.5) end
+  local top  = rowY(1)
+  local bf   = fitFont("99", math.floor(W * 0.5), math.floor((rowY(3) - sx(2) - top) * 0.5), MIDSIZE)
+  local colW = listColW(bf)
+  drawSatsBlock(x0, top, colW, bf, d)
+  for i, r in ipairs(LIST_ROWS) do
+    local y, v = rowY(i + 1), listValue(r, d)
+    dtext(x0, y, r.label, COLORS.muted, LIST_FONT)
+    drawValueUnit(x0 + colW - valueUnitW(v, r.unit, LIST_FONT), y, v, r.unit, COLORS.fg, LIST_FONT)
+  end
+  local bx = x0 + colW + GAP
+  drawDirection(bx, top, x0 + W - bx, y0 + H - top, d, sx(60), false)
+end
+
+-- The whole ACTIVE tile: FULL, MEDIUM, or only the arrow (SMALL).
 local function drawActive(W, H, x0, y0, d)
-  local ok, bf, Hl = activeFitsList(W, H)
-  if ok then
-    drawHeader(x0, y0)
-    local top  = y0 + headerH()
-    local colW = listColW(bf)
-    drawSatsBlock(x0, top, colW, bf, d)
-    drawList(x0, y0 + H, colW, listRowsFor(bf, Hl), listPitch(bf, Hl), d)
-    local bx = x0 + colW + GAP
-    drawDirection(bx, top, x0 + W - bx, Hl, d, sx(60), false)
+  if activeFitsFull(W, H) then
+    drawActiveFull(W, H, x0, y0, d)
+  elseif activeFitsMedium(W, H) then
+    drawActiveMedium(W, H, x0, y0, d)
   else
     drawDirection(x0, y0, W, H, d, math.floor(math.min(W, H) / 2), true)
   end
@@ -753,6 +799,7 @@ end
 -- target by half the remaining way, capped at SMOOTH_MAX_STEP degrees, along the
 -- shorter direction, so GPS jitter softens and a real turn follows within a few
 -- frames. nil target (no course) forgets the value, the next one snaps.
+-- The result is always -180..180 (rel's range, which relLabel relies on).
 local SMOOTH_MAX_STEP = 40
 local function smoothAngle(prev, target)
   if target == nil then return nil end
@@ -762,7 +809,7 @@ local function smoothAngle(prev, target)
   local step = diff * 0.5
   if step >  SMOOTH_MAX_STEP then step =  SMOOTH_MAX_STEP end
   if step < -SMOOTH_MAX_STEP then step = -SMOOTH_MAX_STEP end
-  return (prev + step) % 360
+  return ((prev + step + 180) % 360) - 180
 end
 
 -- ---------------------------------------------------------------------------
