@@ -79,8 +79,10 @@ end
 
 -- The three voice events, in editor order: config key, row label, picker title.
 local EVENTS = {
+  { key = "ready", label = "Ready to fly", title = "Ready to fly sound",
+    hint = "GPS fix is stable, safe to arm" },
   { key = "fix",  label = "Home set",    title = "Home set sound",
-    hint = "Home position stored after a stable fix" },
+    hint = "Home stored when arming (or at first stable fix)" },
   { key = "lost", label = "GPS lost",    title = "GPS lost sound",
     hint = "GPS fix lost for a few seconds" },
   { key = "rec",  label = "GPS recover", title = "GPS recover sound",
@@ -266,7 +268,7 @@ local S = {
   dialog    = nil,   -- { text, yes, no, onYes } or { rows = {{label,value},...} }
   picker    = nil,
   -- Settings editor working state
-  set        = nil,  -- { sats, haptic, hapStr, snd = { fix = idx, lost = idx, rec = idx } }
+  set        = nil,  -- { sats, haptic, hapStr, snd = { <event key> = idx } }
   setField   = nil,  -- in-place edited field: "sats", "haptic" or "hapStr"
   sndOpts    = nil,  -- per event key: picker options
   setEditing = false,
@@ -749,11 +751,13 @@ end
 -- Screen: Settings editor
 -- ---------------------------------------------------------------------------
 
--- Cursor rows: Min sats (1), the three event rows (2..4), Haptic on/off (5),
--- Haptic strength (6, hidden while haptic is off), Reset (7), Back (8), Save (9).
--- ENTER on an event row dives in; the roller then steps Sound -> Test and ENTER
--- opens the picker / plays the focused cell.
-local ROW_SATS, ROW_EV1, ROW_HAPTIC, ROW_HAPSTR, ROW_RESET, ROW_BACK, ROW_SAVE = 1, 2, 5, 6, 7, 8, 9
+-- Cursor rows: Min sats (1), the event rows (2..1+#EVENTS), Haptic on/off,
+-- Haptic strength (hidden while haptic is off), Reset, Back, Save. ENTER on an
+-- event row dives in; the roller then steps Sound -> Test and ENTER opens the
+-- picker / plays the focused cell.
+local ROW_SATS, ROW_EV1 = 1, 2
+local ROW_HAPTIC = ROW_EV1 + #EVENTS
+local ROW_HAPSTR, ROW_RESET, ROW_BACK, ROW_SAVE = ROW_HAPTIC + 1, ROW_HAPTIC + 2, ROW_HAPTIC + 3, ROW_HAPTIC + 4
 local SET_ITEMS = ROW_SAVE
 local SET_SUBS      = { "snd", "test" }
 local SET_SUBS_MUTE = { "snd" }   -- Test dropped when the sound is Off

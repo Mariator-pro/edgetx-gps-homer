@@ -373,33 +373,91 @@ local function drawArrow(cx, cy, r, relDeg, col)
   fillTri(tx, ty, nx, ny, rx, ry, col)
 end
 
+-- Small house (standing on the home point): filled roof over a filled body,
+-- door in track colour so it reads as a house on both themes. Radius r like
+-- the arrow; the whole icon spans about 1.5 r and is centred on (cx, cy).
+local function drawHouse(cx, cy, r, col)
+  local roofTop, eave, base = cy - math.floor(r * 0.75), cy - math.floor(r * 0.1), cy + math.floor(r * 0.75)
+  local halfRoof, halfBody = math.floor(r * 0.85), math.floor(r * 0.6)
+  fillTri(cx, roofTop, cx - halfRoof, eave, cx + halfRoof, eave, col)
+  lcd.setColor(CUSTOM_COLOR, col)
+  lcd.drawFilledRectangle(cx - halfBody, eave, 2 * halfBody, base - eave, CUSTOM_COLOR)
+  local dw = math.max(2, math.floor(r * 0.3))
+  local dh = math.max(3, math.floor(r * 0.45))
+  lcd.setColor(CUSTOM_COLOR, COLORS.track)
+  lcd.drawFilledRectangle(cx - math.floor(dw / 2), base - dh, dw, dh, CUSTOM_COLOR)
+end
+
 -- Space reserved outside the ring for the letters: 75 % of the reported
 -- SMLSIZE height (the reported height carries generous leading; glyphs are
 -- about half of it), so the ring does not shrink for empty leading.
 local function ringMargin() return math.floor(fontH(SMLSIZE) * 0.75) end
 
--- Compass ring: thin circle in track colour with N/E/S/W outside it, the
--- letters rotated by `rot` (Nose up: -course, so they show where north lies
--- relative to the nose; North up: 0). Ring only when drawCircle exists.
+-- Compass ring: a band in track colour (RING_W thick) with N/E/S/W outside it
+-- and short tick marks at the intercardinals, all rotated by `rot` (Nose up:
+-- -course, so they show where north lies relative to the nose; North up: 0).
 local CARDINALS = { "N", "E", "S", "W" }
+local RING_W    = math.max(2, sx(2))   -- ring band thickness
+local TICK_LEN  = math.max(3, sx(4))   -- intercardinal tick length outside the ring
+
+-- Ring band: annulus when the build has it, else stacked circles. A full
+-- 0..360 annulus draws nothing (EdgeTX turns it into a zero-length arc), so
+-- the band is two half arcs; width = outer - inner radius.
+local function drawRing(cx, cy, R)
+  lcd.setColor(CUSTOM_COLOR, COLORS.track)
+  if lcd.drawAnnulus then
+    lcd.drawAnnulus(cx, cy, R - RING_W, R, 0, 180, CUSTOM_COLOR)
+    lcd.drawAnnulus(cx, cy, R - RING_W, R, 180, 360, CUSTOM_COLOR)
+  elseif lcd.drawCircle then
+    for i = 0, RING_W - 1 do lcd.drawCircle(cx, cy, R - i, CUSTOM_COLOR) end
+  end
+end
 -- Text centred on a circle of radius `tr` at angle `ang` (0 = up, clockwise).
 local function drawRingText(cx, cy, tr, ang, txt, col)
   local x, y = rot(cx, cy, tr, ang, 0)
   dtext(x - math.floor(textW(txt, SMLSIZE) / 2), y - math.floor(fontH(SMLSIZE) / 2), txt, col, SMLSIZE)
 end
+-- Lubber line (Nose up): a fixed filled triangle at 12 o'clock on the letter
+-- radius, tip towards the ring; the letter that turns underneath is left out.
+local function drawNoseMark(cx, cy, tr)
+  local h = math.max(3, math.floor(fontH(SMLSIZE) * 0.4))   -- half height
+  local w = math.max(2, math.floor(h * 0.6))                 -- half width: slim
+  local y = cy - tr
+  fillTri(cx - w, y - h, cx + w, y - h, cx, y + h, COLORS.fg)
+end
+
 -- `skipAng` (optional): a cardinal that would touch the H badge drawn there
--- (half letter + badge radius) is left out.
+-- (half letter + badge radius) is left out; in Nose up the nose mark at 0
+-- deg does the same.
+local NORTH_UP = false
 local function drawCompass(cx, cy, R, rotDeg, skipAng)
-  if lcd.drawCircle then
-    lcd.setColor(CUSTOM_COLOR, COLORS.track)
-    lcd.drawCircle(cx, cy, R, CUSTOM_COLOR)
-  end
+  drawRing(cx, cy, R)
   local tr = R + math.floor(fontH(SMLSIZE) / 2)   -- letters outside the ring
+  if not NORTH_UP then skipAng = 0; drawNoseMark(cx, cy, tr) end
   local minSep = math.deg((textW("W", SMLSIZE) / 2 + fontH(SMLSIZE) / 2) / tr)
   for i, c in ipairs(CARDINALS) do
     local ang  = (i - 1) * 90 + rotDeg
     local diff = skipAng and math.abs(((ang - skipAng + 540) % 360) - 180) or 999
     if diff > minSep then drawRingText(cx, cy, tr, ang, c, COLORS.muted) end
+  end
+  -- Tick marks: at the cardinals a short tick inside the band (the letter sits
+  -- outside); at the intercardinals a longer tick crossing the band, inside to
+  -- outside. The outer part is skipped under the H badge / nose mark.
+  if lcd.drawLine then
+    lcd.setColor(CUSTOM_COLOR, COLORS.track)   -- same colour as the band
+    local inner  = R - RING_W
+    local tickIn = math.max(2, math.floor(TICK_LEN * 2 / 3))   -- inner part a third shorter
+    for i = 0, 7 do
+      local ang  = i * 45 + rotDeg
+      local x1, y1 = rot(cx, cy, inner - tickIn, ang, 0)
+      local rOut = inner
+      if i % 2 == 1 then
+        local diff = skipAng and math.abs(((ang - skipAng + 540) % 360) - 180) or 999
+        rOut = (diff > minSep) and (R + 2 + TICK_LEN) or R
+      end
+      local x2, y2 = rot(cx, cy, rOut, ang, 0)
+      lcd.drawLine(x1, y1, x2, y2, SOLID, CUSTOM_COLOR)
+    end
   end
   return tr
 end
@@ -409,7 +467,6 @@ end
 -- course. 2 North up = map style, the ring is fixed, the arrow is the course
 -- and an "H" outside the ring marks the bearing to home; a cardinal letter
 -- that would sit under the H is left out.
-local NORTH_UP = false
 local function drawCompassArrow(cx, cy, R, d)
   local r = math.floor(R * 0.55)
   if NORTH_UP then
@@ -582,9 +639,40 @@ end
 -- capped at rCap. The degree label sits right of the arrow, vertically centred,
 -- with the largest font that fits; if even SMLSIZE does not fit beside it, the
 -- arrow shrinks and the label goes below (never in SMALL, which has no label).
+-- Ring without arrow or H plus a status line where "HOME <rel>" normally sits:
+-- READY ("READY TO FLY" / "NO HOME") and standing on the home point ("AT HOME").
+-- SMALL has no room for the ring: the short word alone, as large as fits.
+local function drawRingStatus(x0, top, W, boxH, d, rCap, small, txt, short, col, house)
+  local cx    = x0 + math.floor(W / 2)
+  local smlH  = fontH(SMLSIZE)
+  local areaH = boxH - smlH - sx(2)
+  local R     = math.min(math.floor(math.min(W, areaH) / 2) - ringMargin(), rCap)
+  if not small and R >= sx(12) then
+    local rcy = top + math.floor(areaH / 2)
+    drawCompass(cx, rcy, R, NORTH_UP and 0 or -(d.course or 0))
+    if house then drawHouse(cx, rcy, math.floor(R * 0.55), COLORS.fg) end
+    dtext(x0 + math.floor((W - textW(txt, SMLSIZE)) / 2), top + areaH + sx(2), txt, col, SMLSIZE)
+  else
+    local f = fitFont("NO HOME", math.floor(W * 0.95), boxH, DBLSIZE)
+    dtext(x0 + math.floor((W - textW(short, f)) / 2), top + math.floor((boxH - fontH(f)) / 2), short, col, f)
+  end
+end
+
 local function drawDirection(x0, top, W, boxH, d, rCap, small)
   local cx = x0 + math.floor(W / 2)
   local cy = top + math.floor(boxH / 2)
+  if d.status == "READY" then
+    if d.noHome then
+      drawRingStatus(x0, top, W, boxH, d, rCap, small, "NO HOME", "NO HOME", CRIT_COL)
+    else
+      drawRingStatus(x0, top, W, boxH, d, rCap, small, "READY TO FLY", "READY", COLORS.muted)
+    end
+    return
+  end
+  if d.atHome then
+    drawRingStatus(x0, top, W, boxH, d, rCap, small, "AT HOME", "AT HOME", COLORS.muted, true)
+    return
+  end
   if d.courseValid and d.rel then
     local lbl  = relLabel(d.rel)
     local smlH = fontH(SMLSIZE)
@@ -661,6 +749,22 @@ local function drawActive(W, H, x0, y0, d)
   end
 end
 
+-- Angle smoothing (display only): each frame moves the drawn angle towards the
+-- target by half the remaining way, capped at SMOOTH_MAX_STEP degrees, along the
+-- shorter direction, so GPS jitter softens and a real turn follows within a few
+-- frames. nil target (no course) forgets the value, the next one snaps.
+local SMOOTH_MAX_STEP = 40
+local function smoothAngle(prev, target)
+  if target == nil then return nil end
+  if prev == nil then return target end
+  local diff = ((target - prev + 540) % 360) - 180
+  if math.abs(diff) < 0.5 then return target end
+  local step = diff * 0.5
+  if step >  SMOOTH_MAX_STEP then step =  SMOOTH_MAX_STEP end
+  if step < -SMOOTH_MAX_STEP then step = -SMOOTH_MAX_STEP end
+  return (prev + step) % 360
+end
+
 -- ---------------------------------------------------------------------------
 -- Tile dispatch: map core's status to a screen (display derivation, Spec 3.1).
 -- Stable errors win over volatile states (Spec 4.1 priority).
@@ -685,11 +789,16 @@ local function drawTile(ctx, z, x0, y0, W, H)
   end
 
   local st = r.status
-  if st == "ACTIVE" then
+  if st == "ACTIVE" or st == "READY" then
+    -- READY = the same live view before home is set: no arrow/H, DIST "--",
+    -- a status line instead of "HOME <rel>".
+    ctx.smooth = ctx.smooth or {}
+    ctx.smooth.rel    = smoothAngle(ctx.smooth.rel,    r.rel)
+    ctx.smooth.course = smoothAngle(ctx.smooth.course, r.course)
     local d = {
-      status = st, rel = r.rel, bearingToHome = r.bearingToHome, sector = r.sector,
-      courseValid = r.courseValid, course = r.course, distanceM = r.distanceM, sats = r.sats,
-      alt = r.alt, gspd = r.gspd, fixLost = r.fixLost,
+      status = st, rel = ctx.smooth.rel, bearingToHome = r.bearingToHome, sector = r.sector,
+      courseValid = r.courseValid, course = ctx.smooth.course, distanceM = r.distanceM, sats = r.sats,
+      alt = r.alt, gspd = r.gspd, fixLost = r.fixLost, noHome = r.noHome, atHome = r.atHome,
     }
     drawActive(W, H, x0, y0, d)
     drawHeartbeat(ctx, z)

@@ -9,21 +9,26 @@
 -- comes from the script below. With SIMULATE = false the file is never loaded.
 --
 -- Timeline (seconds after load):
---   0-6    sats climb 3 -> 9 on the ground   -> ACQUIRING, then home set
---   6-36   fly out heading 0 (north), 40 km/h, climb to 80 m
+--   0-6    sats climb 3 -> 9 on the ground   -> ACQUIRING
+--   6-10   disarmed with a stable fix        -> READY ("Ready to fly")
+--   10     armed                             -> home set
+--   10-14  armed, still on the ground         -> AT HOME (no course, no bearing)
+--   14-44  fly out heading 0 (north), accelerating 0 -> 40 km/h over 8 s
+--          (AT HOME until 15 m away, then the arrow), climb to 80 m
 --          -> home lies exactly south: H sits on the S letter (NorthUp)
---   36-56  leg east at 40 km/h: bearing to home drifts 180 -> ~214 deg,
+--   44-64  leg east at 40 km/h: bearing to home drifts 180 -> ~214 deg,
 --          the S letter comes back once the H has moved a letter width away
---   56-96  full circle (heading +9 deg/s) at 40 km/h
---   96-126 fly straight back towards home at 50 km/h
---   126-136 hover at home, speed 0            -> absolute direction fallback
---   136-142 sats drop to 2                    -> fix lost / recovered
---   142-148 telemetry off                     -> ENDED
---   148    loop
+--   64-104 full circle (heading +9 deg/s) at 40 km/h
+--   104-134 fly straight back towards home at 50 km/h
+--   134-144 hover at home, speed 0           -> AT HOME again
+--   144-150 sats drop to 2                   -> fix lost (announced after 3 s)
+--   150-156 sats back to 9                   -> fix recovered
+--   156-162 telemetry off                    -> ENDED
+--   162    loop
 -- =====================================================================
 return function(core)
   local HOME_LAT, HOME_LON = 48.13745, 11.57518
-  local LOOP = 148
+  local LOOP = 162
   local t0
   local lat, lon = HOME_LAT, HOME_LON
   local lastT
@@ -45,22 +50,27 @@ return function(core)
     end
 
     local telem, sats, gspd, hdg, alt = true, 9, 0, 0, 0
+    local armed = t >= 10
     if t < 6 then
       sats = math.min(9, 3 + math.floor(t))
-    elseif t < 36 then
-      gspd, hdg, alt = 40, 0, math.min(80, (t - 6) * 5)
-    elseif t < 56 then
+    elseif t < 14 then
+      -- on the ground: disarmed until 10 s (READY), then armed but not moving (AT HOME)
+    elseif t < 44 then
+      gspd, hdg, alt = math.min(40, (t - 14) * 5), 0, math.min(80, (t - 14) * 4)
+    elseif t < 64 then
       gspd, hdg, alt = 40, 90, 80
-    elseif t < 96 then
-      gspd, hdg, alt = 40, (90 + (t - 56) * 9) % 360, 80
-    elseif t < 126 then
-      gspd, alt = 50, 80 - (t - 96) * 2
+    elseif t < 104 then
+      gspd, hdg, alt = 40, (90 + (t - 64) * 9) % 360, 80
+    elseif t < 134 then
+      gspd, alt = 50, 80 - (t - 104) * 2
       hdg = core.bearingTo(lat, lon, HOME_LAT, HOME_LON)
-      if core.haversine(lat, lon, HOME_LAT, HOME_LON) < 15 then gspd = 0 end
-    elseif t < 136 then
+      if core.haversine(lat, lon, HOME_LAT, HOME_LON) < 8 then gspd = 0 end   -- inside HOME_NEAR_M -> AT HOME
+    elseif t < 144 then
       gspd, alt = 0, 20
-    elseif t < 142 then
+    elseif t < 150 then
       sats, alt = 2, 20
+    elseif t < 156 then
+      alt = 20                    -- sats back to 9 -> "GPS recovered"
     else
       telem = false
     end
@@ -73,6 +83,8 @@ return function(core)
       gspd          = telem and gspd or nil,
       hdg           = telem and hdg  or nil,
       alt           = telem and alt  or nil,
+      armed         = armed,
+      armedKnown    = true,
       sensorMissing = false,
     }
   end

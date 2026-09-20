@@ -44,19 +44,21 @@ M.SENSORS = {
   alt  = "Alt",    -- altitude; GAlt (GPS altitude) is preferred when discovered
   galt = "GAlt",
   rqly = "RQly",
+  fm   = "FM",     -- flight mode text; carries the armed state (optional)
 }
 
 -- Event sounds. Folder fixed (case-sensitive FAT: folder upper, files lower);
 -- per event the config may hold a file name or `false` (that event muted).
 -- Absolute path bypasses EdgeTX's per-language resolution so the pilot's own
 -- voice plays regardless of locale.
-M.VERSION   = "0.1.0"
+M.VERSION   = "1.0.0"
 
 -- Simulator switch: true replaces all telemetry reads with the scripted flight
 -- in sim.lua (Companion cannot feed GPS/GSpd/Hdg). Must be false for flying.
 M.SIMULATE  = false
 M.SOUND_DIR = "/SOUNDS/en/scripts/GPSHOMER/"
 M.SOUNDS = {
+  ready = "gpsready.wav", -- "ready to fly" (stable fix, home not set yet)
   fix  = "gpsfix.wav",   -- "home set"
   lost = "gpslost.wav",  -- "GPS lost"
   rec  = "gpsrec.wav",   -- "GPS recovered"
@@ -65,7 +67,8 @@ M.SOUNDS = {
 -- Factory defaults for the event sounds, frozen BEFORE any config overlay so the
 -- tool can offer a true "Default" per event and applyConfigOverrides stays
 -- idempotent regardless of call order.
-M.SOUND_DEFAULTS = { fix = M.SOUNDS.fix, lost = M.SOUNDS.lost, rec = M.SOUNDS.rec }
+M.SOUND_DEFAULTS = { ready = M.SOUNDS.ready, fix = M.SOUNDS.fix, lost = M.SOUNDS.lost, rec = M.SOUNDS.rec }
+M.SOUND_KEYS     = { "ready", "fix", "lost", "rec" }
 
 -- Tunable parameters. HOME_MIN_SATS and the two HAPTIC values are pilot-editable
 -- (via the tool / config.lua); the rest are fixed core constants (PC edit only).
@@ -75,7 +78,9 @@ M.PARAMS = {
   HAPTIC          = false, -- Vibrate alongside an event sound (opt-in; config: haptic)
   HAPTIC_STRENGTH = 2,     -- Pulse-length tier: 1 = soft, 2 = normal, 3 = strong
   COURSE_MIN_SPD = 6,      -- FR-10: km/h below which the GPS course is not usable
-  HOME_STABLE_T  = 3,      -- FR-6: fix must stay ok this long before home is set (s)
+  HOME_STABLE_T  = 3,      -- fix must stay ok this long for "ready" / home set without FM (s)
+  MOVE_LOCK_T    = 1,      -- moving this long before home is set locks home (no FM only) (s)
+  HOME_NEAR_M    = 15,     -- closer than this: "at home", no arrow / bearing (m)
   FIX_LOSS_T     = 3,      -- NFR-4: fix-loss debounce (s)
   LINK_LOSS_T    = 1.5,    -- ACTIVE -> ENDED after this much sustained link loss (s)
   ENDED_HOLD_T   = 60,     -- FR-13: ENDED holds the last position this long (s)
@@ -87,7 +92,7 @@ M.PARAMS = {
 -- playHaptic pulse length per strength tier, and pulses per event: GPS lost
 -- fires twice to feel clearly stronger than the two "good news" events.
 M.HAPTIC_DUR    = { [1] = 15, [2] = 30, [3] = 50 }
-M.HAPTIC_PULSES = { fix = 1, lost = 2, rec = 1 }
+M.HAPTIC_PULSES = { ready = 1, fix = 1, lost = 2, rec = 1 }
 
 -- Editable ranges: the SINGLE source for both the on-radio editor and the
 -- runtime clamp in normalizeConfig, so they can never drift apart.
@@ -276,6 +281,7 @@ function M.normalizeConfig(cfg)
     hapticStrength = clampNum(cfg.hapticStrength,
                     L.hapticStrength.min, L.hapticStrength.max, DEFAULTS.hapticStrength),
     sounds = {
+      ready = soundOr(snd.ready, nil),
       fix  = soundOr(snd.fix,  nil),
       lost = soundOr(snd.lost, nil),
       rec  = soundOr(snd.rec,  nil),
@@ -290,7 +296,7 @@ function M.applyConfigOverrides(cfg)
   M.PARAMS.HOME_MIN_SATS   = n.homeMinSats
   M.PARAMS.HAPTIC          = n.haptic
   M.PARAMS.HAPTIC_STRENGTH = n.hapticStrength
-  for _, k in ipairs({ "fix", "lost", "rec" }) do
+  for _, k in ipairs(M.SOUND_KEYS) do
     local v = n.sounds[k]
     if v == nil then v = M.SOUND_DEFAULTS[k] end
     M.SOUNDS[k] = v
@@ -321,6 +327,18 @@ pcall(loadConfigOnce)
 -- The sensors the script cannot work without (all from the FC's GPS frame).
 -- Alt is display-only and RQly has a fallback, so neither is mandatory.
 local REQUIRED = { "gps", "sats", "gspd", "hdg" }
+
+-- Armed state from Betaflight's CRSF flight-mode text (>= 4.0): while disarmed
+-- the string ends in "*" (ready), "!" (arming blocked) or "?" (rescue n/a);
+-- armed strings carry no marker. "!FS!" (failsafe) is an armed state despite
+-- its trailing "!". Returns armed, known; known = false when the value is not a
+-- usable string (sensor absent / other firmware), then the caller falls back.
+function M.armedFromFM(v)
+  if type(v) ~= "string" or #v == 0 then return false, false end
+  if v == "!FS!" then return true, true end
+  local last = string.sub(v, -1)
+  return not (last == "*" or last == "!" or last == "?"), true
+end
 
 -- Read + validate every sensor. Invalid samples become nil so evaluate() keeps
 -- the last valid value. sensorMissing distinguishes "sensor never discovered"
@@ -356,6 +374,9 @@ function M.readSnapshot()
     if not sensorExists(S[k]) then sensorMissing = true end
   end
 
+  local armed, armedKnown = false, false
+  if sensorExists(S.fm) then armed, armedKnown = M.armedFromFM(safeGet(S.fm)) end
+
   return {
     telem         = telem,
     gps           = gps,
@@ -363,6 +384,8 @@ function M.readSnapshot()
     gspd          = gspd,
     hdg           = hdg,
     alt           = alt,
+    armed         = armed,
+    armedKnown    = armedKnown,
     sensorMissing = sensorMissing,
   }
 end
@@ -389,11 +412,16 @@ function M.resetFlight(state)
   state.homeSet          = false
   state.homeLat          = nil
   state.homeLon          = nil
-  state.fixOkSince       = nil   -- home-set stabilisation timer (nil = not started)
+  state.fixOkSince       = nil   -- fix stabilisation timer (nil = not started)
   state.fixLostSince     = nil   -- fix-loss debounce timer
   state.fixLost          = false
   state.linkLostSince    = nil   -- link-loss debounce timer
   state.endedAt          = 0     -- when ENDED was entered (only read after set)
+  state.ready            = false -- stable fix seen (READY screen) while home is unset
+  state.homeLocked       = false -- moved before home was set (no FM): no home this flight
+  state.moveSince        = nil   -- movement timer for the lock
+  state.lastArmed        = nil   -- last armed state (nil = not seen yet; no edge)
+  state.readyAnnounced   = false
   state.homeAnnounced    = false
   state.fixLostAnnounced = false
   -- last valid telemetry holds (also the frozen ENDED position)
@@ -414,7 +442,7 @@ end
 
 -- ---------------------------------------------------------------------------
 -- State machine (pure: mutates `state`, returns a result table; no I/O)
--- States: NO_TELEM / ACQUIRING / ACTIVE / ENDED. `now` is in ms.
+-- States: NO_TELEM / ACQUIRING / READY / ACTIVE / ENDED. `now` is in ms.
 -- ---------------------------------------------------------------------------
 function M.evaluate(state, snap, now)
   local P      = M.PARAMS
@@ -436,7 +464,7 @@ function M.evaluate(state, snap, now)
         state.status  = "ENDED"        -- freeze position, stay silent (FR-13)
         state.endedAt = now
       end
-    elseif state.status == "ACQUIRING" then
+    elseif state.status == "ACQUIRING" or state.status == "READY" then
       if not state.linkLostSince then state.linkLostSince = now end
       if now - state.linkLostSince >= P.LINK_LOSS_T * 1000 then
         M.resetFlight(state)           -- nothing to show -> straight to NO_TELEM
@@ -470,30 +498,90 @@ function M.evaluate(state, snap, now)
             and snap.sats ~= nil
             and snap.sats >= P.HOME_MIN_SATS
 
-  -- ---- home not yet set: try to set it (ACQUIRING) ----
+  -- ---- home not yet set (ACQUIRING / READY) ----
   if not state.homeSet then
+    -- Stabilisation must be uninterrupted.
     if fixOk then
       if not state.fixOkSince then state.fixOkSince = now end
-      if now - state.fixOkSince >= P.HOME_STABLE_T * 1000 then
-        state.homeSet = true
-        state.homeLat = snap.gps.lat
-        state.homeLon = snap.gps.lon
-        if not state.homeAnnounced then
-          result.homeSet      = true   -- one-shot event
-          state.homeAnnounced = true
+    else
+      state.fixOkSince = nil
+    end
+    local fixStable = fixOk and (now - state.fixOkSince) >= P.HOME_STABLE_T * 1000
+
+    local function setHome()
+      state.homeSet = true
+      state.homeLat = snap.gps.lat
+      state.homeLon = snap.gps.lon
+      if not state.homeAnnounced then
+        result.homeSet      = true   -- one-shot event
+        state.homeAnnounced = true
+      end
+    end
+
+    -- With the armed state known, home is set exactly like Betaflight does it:
+    -- at the disarmed -> armed edge, if the fix is good right then (no
+    -- stabilisation). Arming without a fix just leaves home unset until the
+    -- next edge on the ground. Without it, home is set at the first stable fix,
+    -- unless the model already moved (then no home this flight).
+    local armed, known = snap.armed, snap.armedKnown
+    local canSetHome
+    if known then
+      if not armed and state.lastArmed == true then
+        state.readyAnnounced = false     -- landed without home: announce ready again
+      end
+      canSetHome = not armed
+    else
+      if fixOk and snap.gspd and snap.gspd >= P.COURSE_MIN_SPD then
+        if not state.moveSince then state.moveSince = now end
+        if now - state.moveSince >= P.MOVE_LOCK_T * 1000 then state.homeLocked = true end
+      else
+        state.moveSince = nil
+      end
+      canSetHome = not state.homeLocked
+    end
+
+    -- "Ready to fly": once per stable fix while home could be set now; re-armed
+    -- when the fix drops (and on disarm, above).
+    if fixStable and canSetHome and not state.readyAnnounced then
+      result.readyEvent    = true
+      state.readyAnnounced = true
+    end
+    if not fixOk then state.readyAnnounced = false end
+
+    if known then
+      if armed and state.lastArmed == false and fixOk then setHome() end
+      state.lastArmed = armed
+    elseif fixStable and canSetHome then
+      setHome()
+    end
+
+    if not state.homeSet then
+      -- READY (live view, no home elements) from the first stable fix; a fix
+      -- loss falls back to ACQUIRING only after the same debounce ACTIVE uses.
+      if fixStable then state.ready = true end
+      if state.ready then
+        if fixOk then
+          state.fixLostSince = nil
+        else
+          if not state.fixLostSince then state.fixLostSince = now end
+          if now - state.fixLostSince >= P.FIX_LOSS_T * 1000 then
+            state.ready, state.fixLostSince = false, nil
+          end
         end
       end
-    else
-      state.fixOkSince = nil           -- stabilisation must be uninterrupted
+      state.status         = state.ready and "READY" or "ACQUIRING"
+      result.status        = state.status
+      result.noHome        = state.ready and not canSetHome   -- armed / locked: no home coming
+      result.sats          = snap.sats or state.lastSats
+      result.alt           = state.lastAlt
+      result.gspd          = state.lastGspd
+      result.fixLost       = not fixOk
+      result.courseValid   = M.courseValid(state.lastGspd or 0)
+      if result.courseValid then result.course = state.lastHdg or 0 end
+      result.sensorMissing = snap.sensorMissing
+      return result
     end
-  end
-
-  if not state.homeSet then
-    state.status             = "ACQUIRING"
-    result.status            = "ACQUIRING"
-    result.sats              = snap.sats or state.lastSats
-    result.sensorMissing = snap.sensorMissing
-    return result
+    state.fixLostSince = nil   -- clean slate for the ACTIVE debounce
   end
 
   -- ---- ACTIVE ----
@@ -530,6 +618,8 @@ function M.evaluate(state, snap, now)
       result.course = state.lastHdg or 0     -- GPS course, for the compass ring
       result.rel    = M.relAngle(result.bearingToHome, result.course)
     end
+    -- (Nearly) on the home point: any direction to it would be GPS noise.
+    result.atHome = result.distanceM < P.HOME_NEAR_M
   end
 
   result.status            = "ACTIVE"
@@ -579,6 +669,7 @@ function M.update(state, now)
 
   -- Each event fires once per transition (evaluate guarantees the one-shot).
   -- A missing WAV plays silently, no error.
+  if result.readyEvent   then announce("ready") end
   if result.homeSet      then announce("fix")  end
   if result.fixLostEvent then announce("lost") end
   if result.fixRecovered then announce("rec")  end
