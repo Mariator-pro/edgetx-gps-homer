@@ -803,7 +803,9 @@ local function drawTile(ctx, z, x0, y0, W, H)
     drawActive(W, H, x0, y0, d)
     drawHeartbeat(ctx, z)
   elseif st == "ACQUIRING" then
-    drawSplashTile(z, "Acquiring GPS", tostring(r.sats or 0) .. " Sats")
+    -- "4 Sats (min 6)": found so far, and the count home needs.
+    drawSplashTile(z, "Searching satellites",
+                   string.format("%d Sats (min %d)", r.sats or 0, core.PARAMS.HOME_MIN_SATS))
     drawHeartbeat(ctx, z)
   elseif st == "ENDED" then
     if r.lastLat and r.lastLon then

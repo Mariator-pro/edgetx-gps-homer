@@ -180,7 +180,7 @@ For radios without a color display, or if you only want the voice announcements:
 ### 3. Try it out
 
 - Power the model, wait for the GPS fix and check on the radio's telemetry page that `GPS`, `Sats`, `GSpd` and `Hdg` show values.
-- On the ground the widget shows `Acquiring GPS` with the satellite count. Once enough satellites are locked (6 by default) for a few seconds, the radio says "Ready to fly" and the widget switches to the live view with `READY TO FLY` under the compass ring; the home arrow and the distance are still missing.
+- On the ground the widget shows `Searching satellites` with the satellite count and the number needed (for example `4 Sats (min 6)`). Once enough satellites are locked (6 by default) for a few seconds, the radio says "Ready to fly" and the widget switches to the live view with `READY TO FLY` under the compass ring; the home arrow and the distance are still missing.
 - Arm the model: the radio says "Home set", and the arrow, the `H` on the ring (NorthUp) and the distance appear.
 - Fly away from the launch position: the distance grows, and as soon as the model moves faster than 6 km/h the arrow appears and points back to the launch position.
 - Switch the model off: after a moment the widget shows `Flight ended` with the last known coordinates, and after one minute it returns to `Waiting for telemetry`.
@@ -211,7 +211,7 @@ Timing values such as the 6 km/h speed threshold or how long the last position i
 
 - **Widget shows "Core missing / Reinstall GPS Homer":** The file `/SCRIPTS/GPSHOMER/core.lua` is missing on the SD card. Copy it again from this repository.
 - **Widget shows "No GPS sensor / Check FC config":** One of the required sensors (`GPS`, `Sats`, `GSpd`, `Hdg`) has never been discovered. Enable GPS telemetry in Betaflight, then run a telemetry discovery on the radio while the GPS has a fix.
-- **Widget stays on "Acquiring GPS":** Not enough satellites yet, or the fix keeps dropping. Give the GPS a clear view of the sky; home is set once the satellite count stays at or above the threshold for a few seconds.
+- **Widget stays on "Searching satellites":** Not enough satellites yet, or the fix keeps dropping. Give the GPS a clear view of the sky; home is set once the satellite count stays at or above the threshold for a few seconds.
 - **Widget shows `NO HOME` after arming, no "Home set" was spoken:** You armed before the GPS had enough satellites, so there is no home point for this flight (Betaflight has none either). Land, disarm, wait for "Ready to fly" and arm again.
 - **"Ready to fly" and "Home set" always come together, before arming:** The radio does not know when the model is armed because the `FM` sensor is missing. Run a telemetry discovery to add it; until then home is stored at the first stable fix, and the model must not move before that.
 - **No arrow, only a direction like "SW 220°":** The model is moving slower than 6 km/h, so the GPS cannot tell the flight direction yet. The arrow appears as soon as you fly.
