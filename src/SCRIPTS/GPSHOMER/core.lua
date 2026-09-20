@@ -4,9 +4,10 @@
 -- SD card path: /SCRIPTS/GPSHOMER/core.lua
 --
 -- Single source of truth for thresholds, sensor names, sounds and the whole
--- runtime logic. Loaded (via loadScript()/loadfile) by BOTH consumers and must
+-- runtime logic. Loaded (via loadScript()/loadfile) by ALL consumers and must
 -- always be installed alongside them:
 --   * the telemetry widget  /WIDGETS/GPSHOMER/main.lua      (display only)
+--   * the function script    /SCRIPTS/FUNCTIONS/gpshom.lua  (voice events only)
 --   * the tools script       /SCRIPTS/TOOLS/GPSHOMER.lua    (configuration)
 --
 -- "core does everything except drawing": the hardware glue (getValue / playFile
@@ -66,25 +67,33 @@ M.SOUNDS = {
 -- idempotent regardless of call order.
 M.SOUND_DEFAULTS = { fix = M.SOUNDS.fix, lost = M.SOUNDS.lost, rec = M.SOUNDS.rec }
 
--- Tunable parameters. Only the first one is pilot-editable (via the tool /
--- config.lua); the rest are fixed core constants (PC edit only). Times are in
--- SECONDS (converted to ms at each comparison), TICK_MS is in ms.
+-- Tunable parameters. HOME_MIN_SATS and the two HAPTIC values are pilot-editable
+-- (via the tool / config.lua); the rest are fixed core constants (PC edit only).
+-- Times are in SECONDS (converted to ms at each comparison), TICK_MS is in ms.
 M.PARAMS = {
   HOME_MIN_SATS  = 6,      -- FR-6: min. sats for the home set   (config: homeMinSats)
+  HAPTIC          = false, -- Vibrate alongside an event sound (opt-in; config: haptic)
+  HAPTIC_STRENGTH = 2,     -- Pulse-length tier: 1 = soft, 2 = normal, 3 = strong
   COURSE_MIN_SPD = 6,      -- FR-10: km/h below which the GPS course is not usable
   HOME_STABLE_T  = 3,      -- FR-6: fix must stay ok this long before home is set (s)
   FIX_LOSS_T     = 3,      -- NFR-4: fix-loss debounce (s)
-  LINK_LOSS_T    = 3,      -- ACTIVE -> ENDED after this much sustained link loss (s)
+  LINK_LOSS_T    = 1.5,    -- ACTIVE -> ENDED after this much sustained link loss (s)
   ENDED_HOLD_T   = 60,     -- FR-13: ENDED holds the last position this long (s)
   AHEAD_DEG      = 15,     -- |rel| <= this -> "ahead"
   BEHIND_DEG     = 165,    -- |rel| >= this -> "behind"
   TICK_MS        = 100,    -- NFR-1: 10 Hz update throttle (ms)
 }
 
+-- playHaptic pulse length per strength tier, and pulses per event: GPS lost
+-- fires twice to feel clearly stronger than the two "good news" events.
+M.HAPTIC_DUR    = { [1] = 15, [2] = 30, [3] = 50 }
+M.HAPTIC_PULSES = { fix = 1, lost = 2, rec = 1 }
+
 -- Editable ranges: the SINGLE source for both the on-radio editor and the
 -- runtime clamp in normalizeConfig, so they can never drift apart.
 M.LIMITS = {
-  homeMinSats = { min = 4, max = 20, step = 1 },
+  homeMinSats     = { min = 4, max = 20, step = 1 },
+  hapticStrength  = { min = 1, max = 3,  step = 1 },
 }
 
 M.CONFIG_PATH           = "/SCRIPTS/GPSHOMER/config.lua"
@@ -94,7 +103,9 @@ M.CONFIG_SCHEMA_VERSION = 1
 -- any config overlay. This is what the tool reads for "Reset to defaults" and
 -- what normalizeConfig falls back to (PARAMS is already overlaid by then).
 M.DEFAULTS = {
-  homeMinSats = M.PARAMS.HOME_MIN_SATS,
+  homeMinSats    = M.PARAMS.HOME_MIN_SATS,
+  haptic         = M.PARAMS.HAPTIC,
+  hapticStrength = M.PARAMS.HAPTIC_STRENGTH,
 }
 local DEFAULTS = M.DEFAULTS
 
@@ -131,6 +142,12 @@ local function clampNum(n, lo, hi, fallback)
   if type(n) ~= "number" then return fallback end
   if n < lo then return lo elseif n > hi then return hi end
   return n
+end
+
+-- A boolean is kept as is; anything else falls back.
+local function boolOr(v, fallback)
+  if type(v) == "boolean" then return v end
+  return fallback
 end
 
 -- True unless fstat positively says the file is gone. fstat is absent on the
@@ -255,6 +272,9 @@ function M.normalizeConfig(cfg)
   return {
     homeMinSats = clampNum(cfg.homeMinSats,
                     L.homeMinSats.min, L.homeMinSats.max, DEFAULTS.homeMinSats),
+    haptic         = boolOr(cfg.haptic, DEFAULTS.haptic),
+    hapticStrength = clampNum(cfg.hapticStrength,
+                    L.hapticStrength.min, L.hapticStrength.max, DEFAULTS.hapticStrength),
     sounds = {
       fix  = soundOr(snd.fix,  nil),
       lost = soundOr(snd.lost, nil),
@@ -267,7 +287,9 @@ end
 -- are left untouched (the tool's Reset relies on that snapshot guarantee).
 function M.applyConfigOverrides(cfg)
   local n = M.normalizeConfig(cfg)
-  M.PARAMS.HOME_MIN_SATS = n.homeMinSats
+  M.PARAMS.HOME_MIN_SATS   = n.homeMinSats
+  M.PARAMS.HAPTIC          = n.haptic
+  M.PARAMS.HAPTIC_STRENGTH = n.hapticStrength
   for _, k in ipairs({ "fix", "lost", "rec" }) do
     local v = n.sounds[k]
     if v == nil then v = M.SOUND_DEFAULTS[k] end
@@ -531,18 +553,35 @@ local function playSound(file)
   end
 end
 
+-- Vibrate alongside an event (HAPTIC_PULSES pulses). No-op when haptic is off
+-- or the build lacks playHaptic (desktop tests / motorless radios).
+local function eventHaptic(key)
+  if not M.PARAMS.HAPTIC or not playHaptic then return end
+  local dur    = M.HAPTIC_DUR[M.PARAMS.HAPTIC_STRENGTH] or M.HAPTIC_DUR[2]
+  local pulses = M.HAPTIC_PULSES[key] or 1
+  for i = 1, pulses do
+    playHaptic(dur, (i < pulses) and dur or 0)   -- gap between pulses, none after the last
+  end
+end
+
+-- Sound plus haptic cue for one event. A muted event (SOUNDS.key == false)
+-- skips playFile but still buzzes: haptic has its own on/off setting.
+local function announce(key)
+  playSound(M.SOUNDS[key])
+  eventHaptic(key)
+end
+
 function M.update(state, now)
   now = now or nowMs()
   local snap   = M.readSnapshot()
   local result = M.evaluate(state, snap, now)
   result.snapshot = snap
 
-  -- Each event fires once per transition (evaluate guarantees the one-shot);
-  -- a muted event holds false and playSound skips it. A missing WAV plays
-  -- silently, no error.
-  if result.homeSet      then playSound(M.SOUNDS.fix)  end
-  if result.fixLostEvent then playSound(M.SOUNDS.lost) end
-  if result.fixRecovered then playSound(M.SOUNDS.rec)  end
+  -- Each event fires once per transition (evaluate guarantees the one-shot).
+  -- A missing WAV plays silently, no error.
+  if result.homeSet      then announce("fix")  end
+  if result.fixLostEvent then announce("lost") end
+  if result.fixRecovered then announce("rec")  end
 
   return result
 end

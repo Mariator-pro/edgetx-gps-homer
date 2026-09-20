@@ -18,6 +18,7 @@ A small EdgeTX project that shows you **where home is and how far away it is**, 
 - [📋 Compatibility](#-compatibility)
 - [🎯 What is it for?](#-what-is-it-for)
 - [🧰 Requirements](#-requirements)
+- [🧩 Script variants](#-script-variants)
 - [📥 Installation](#-installation)
 - [⚙️ Customizing](#️-customizing)
 - [🛠️ Troubleshooting](#️-troubleshooting)
@@ -69,21 +70,65 @@ When the model is standing still or hovering slowly, the GPS course is not usabl
 
 ---
 
+## 🧩 Script variants
+
+The logic lives in a shared core module (`core.lua`). On top of it sit two wrappers, and you install **exactly one** of them:
+
+<table>
+  <thead>
+    <tr>
+      <th width="24%"></th>
+      <th width="38%">Widget</th>
+      <th width="38%">Function script</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Voice events (home set, GPS lost, GPS recovered) + haptic</td>
+      <td>✅</td>
+      <td>✅</td>
+    </tr>
+    <tr>
+      <td>Home arrow, distance, last known position</td>
+      <td>✅</td>
+      <td>❌ (no display)</td>
+    </tr>
+    <tr>
+      <td>Runs in the background</td>
+      <td>✅ (keeps announcing even when the screen is not shown)</td>
+      <td>✅ (Special Function)</td>
+    </tr>
+    <tr>
+      <td>Supported radios</td>
+      <td>color-display radios only</td>
+      <td>all EdgeTX radios, including black-and-white ones</td>
+    </tr>
+  </tbody>
+</table>
+
+> ⚠️ **Don't install both at the same time**, or every event would be announced twice. The widget fully replaces the function script. For the same reason, place the widget on **one screen only**.
+
+Both variants need `core.lua` on the SD card and share the same settings (see [Customizing](#️-customizing)).
+
+---
+
 ## 📥 Installation
 
 ### 1. Copy the files to the SD card
 
-Take the SD card out of the radio (or connect the radio via USB as mass storage) and copy everything below 1:1:
+Take the SD card out of the radio (or connect the radio via USB as mass storage) and copy everything below 1:1. It does no harm to have both variants on the card; you pick one later by **either** activating the widget **or** adding the function script to a Special Function (just not both, see [Script variants](#-script-variants)):
 
 ```
 SCRIPTS/
 ├── GPSHOMER/
 │   └── core.lua            ← shared logic (mandatory)
+├── FUNCTIONS/
+│   └── gpshom.lua          ← function-script variant (voice only)
 └── TOOLS/
     └── GPSHOMER.lua        ← on-radio settings tool (optional)
 WIDGETS/
 └── GPSHOMER/
-    └── main.lua            ← the widget
+    └── main.lua            ← widget variant
 SOUNDS/
 └── en/
     └── scripts/
@@ -95,7 +140,7 @@ SOUNDS/
 
 All files are available in the matching folders of this repository, so just copy them to the same locations on the SD card. The WAV files always live under `/SOUNDS/en/scripts/GPSHOMER/` regardless of the radio's language setting; the script uses an absolute path to play them.
 
-### 2. Set up the widget
+### 2a. Set up the widget
 
 1. Put the SD card back into the radio and switch it on.
 2. Open the model's **Telemetry / Display** (widget screens) configuration.
@@ -114,12 +159,27 @@ All files are available in the matching folders of this repository, so just copy
 > - **2×3** and **2×4**: shorter zones. The widget drops the speed and altitude rows first and keeps the satellites, the distance and the arrow.
 > - Very small zones show the arrow only.
 
+### 2b. *(Alternative)* Set up the function script (Special Function)
+
+For radios without a color display, or if you only want the voice events:
+
+1. Put the SD card back into the radio and switch it on.
+2. Open the **Model Settings** of the desired model and go to the **Special Functions** (also called "SF") page.
+3. Pick a free slot and configure it as follows:
+   - **Switch / Condition:** `On` (the script runs permanently in the background)
+   - **Action:** `Lua Script`
+   - **Value / Script:** `gpshom`
+   - **Repeat:** `On`
+   - **Enable:** `On`
+4. Save the settings.
+
 ### 3. Test it
 
 - Bind the model, let the GPS get a fix and verify that `GPS`, `Sats`, `GSpd` and `Hdg` show values on the radio.
 - On the ground the widget shows `Acquiring GPS` with the satellite count. Once enough satellites are locked (6 by default) for a few seconds, home is set and the radio says so.
 - Walk or fly away from the launch position: the distance grows and, as soon as the model moves faster than 6 km/h, the arrow appears and points back to the launch position relative to your direction of travel.
 - Switch the model off: after a few seconds the widget shows `Flight ended` with the last known coordinates, then returns to `Waiting for telemetry` after one minute.
+- With the function script you get the voice events only: `Home set` once the fix is stable, `GPS lost` / `GPS recovered` while flying.
 
 ---
 
@@ -130,11 +190,13 @@ To adjust the home-set threshold and pick custom sounds, use the bundled **setti
 - **Settings**:
   - **Min sats**: the number of locked satellites required before home is set. **Editable 4-20** (default 6). Higher = a more reliable launch position, but home is set later.
   - **Sound home set / GPS lost / GPS recover**: pick `Off`, `Default`, or any `.wav` you dropped into `/SOUNDS/en/scripts/GPSHOMER/`, per event. Files can have **any name**, and every `.wav` in that folder shows up in the list automatically. `Off` silences **only that event**.
-  - **Test**: plays the row's currently selected sound so you can compare them on the spot.
+  - **Test**: plays the row's currently selected sound (and the haptic pulse, if enabled) so you can compare them on the spot.
+  - **Haptic feedback**: `Off` (default) or `On`. When on, the radio vibrates alongside each event, independent of the sound (a muted event still buzzes). Home set and GPS recover give one pulse, GPS lost two.
+  - **Haptic strength**: `Soft`, `Normal` or `Strong` pulse length (shown only while haptic feedback is on).
   - **Reset to defaults** restores the factory settings.
 - **About**: version and the paths the project uses.
 
-Press **Save** to write the settings. They land in `/SCRIPTS/GPSHOMER/config.lua`, which `core.lua` reads once when the widget starts, so they apply after the next model select (or reboot). The config file is **optional**: without it the hard-coded defaults stay in force.
+Press **Save** to write the settings. They land in `/SCRIPTS/GPSHOMER/config.lua`, which `core.lua` reads once when the script starts, so **both variants** (widget and function script) use them after the next model select (or reboot). The config file is **optional**: without it the hard-coded defaults stay in force.
 
 Timing constants (course threshold, fix-loss debounce, how long the last position is shown) are deliberately not in the tool; they can be changed at the top of `core.lua`.
 
@@ -148,6 +210,7 @@ Timing constants (course threshold, fix-loss debounce, how long the last positio
 - **No arrow, only a compass sector like "SW 220 deg":** The model is not moving faster than 6 km/h, so the GPS course cannot be used as a heading. The arrow appears as soon as you fly.
 - **Altitude shows "--":** Neither `Alt` nor `GAlt` is discovered. It is optional; everything else keeps working.
 - **No voice at all:** Make sure the WAV files really sit in `/SOUNDS/en/scripts/GPSHOMER/` (the `en/` folder is mandatory even if your radio is set to another language). The quickest check is the settings tool: press **Test** on an event to play its sound directly.
+- **Script doesn't show up when picking it for the Special Function:** Check the file name. It must be exactly `gpshom.lua` (max. 6 characters, otherwise EdgeTX hides function scripts).
 - **A change in `main.lua` or `core.lua` has no effect on the radio:** Delete the compiled `.luac` file next to it; EdgeTX keeps running the old bytecode otherwise.
 
 ---
