@@ -170,7 +170,7 @@ end
 -- Value formatting (Widget-only; core delivers raw values)
 -- ---------------------------------------------------------------------------
 
--- Distance is always whole metres, also above 1 km (unit drawn separately).
+-- Distance is always a whole number, also above 1 km (unit drawn separately).
 local function fmtDist(m)
   if not m then return "--" end
   return string.format("%d", math.floor(m + 0.5))
@@ -520,10 +520,16 @@ local GAP      = sx(4)
 -- (default font in MEDIUM), "SATS" caption and the signal bars beside it on
 -- its baseline. Below it the value list in SMLSIZE: one row per metric, label
 -- left (muted), value+unit right-aligned so the numbers line up.
+-- Units come from the config (read once with core), so the rows are fixed at
+-- load. ALT and SPD are shown as the radio's sensors deliver them (the sensor
+-- unit is set on the radio), so the setting only labels them; the distance is
+-- computed from the coordinates in metres and is scaled to the display unit.
+local IMPERIAL  = core and core.PARAMS.UNITS == "imperial"
+local DIST_F    = IMPERIAL and 3.28084 or 1
 local LIST_ROWS = {
-  { key = "alt",  label = "ALT",  unit = "m",    ref = "9999"  },
-  { key = "dist", label = "DIST", unit = "m",    ref = "9999"  },
-  { key = "spd",  label = "SPD",  unit = "km/h", ref = "999.9" },
+  { key = "alt",  label = "ALT",  unit = IMPERIAL and "ft"  or "m",    ref = "9999"  },
+  { key = "dist", label = "DIST", unit = IMPERIAL and "ft"  or "m",    ref = "9999"  },
+  { key = "spd",  label = "SPD",  unit = IMPERIAL and "mph" or "km/h", ref = "999.9" },
 }
 local LABEL_GAP = sx(6)
 -- Header band height plus the gap to the sats block (sx(1), anchored so the
@@ -575,7 +581,7 @@ end
 local function listPitch(H) return math.max(fontH(LIST_FONT), math.floor(H * 0.20)) end
 
 local function listValue(r, d)
-  if r.key == "dist" then return fmtDist(d.distanceM) end
+  if r.key == "dist" then return fmtDist(d.distanceM and d.distanceM * DIST_F) end
   if r.key == "alt"  then return d.alt  and string.format("%d",   math.floor(d.alt + 0.5)) or "--" end
   return d.gspd and string.format("%.1f", d.gspd) or "--"
 end

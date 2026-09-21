@@ -77,6 +77,7 @@ M.PARAMS = {
   HOME_MIN_SATS  = 6,      -- FR-6: min. sats for the home set   (config: homeMinSats)
   HAPTIC          = false, -- Vibrate alongside an event sound (opt-in; config: haptic)
   HAPTIC_STRENGTH = 2,     -- Pulse-length tier: 1 = soft, 2 = normal, 3 = strong
+  UNITS           = "metric", -- display units: "metric" (m, km/h) or "imperial" (ft, mph); config: units
   COURSE_MIN_SPD = 6,      -- FR-10: km/h below which the GPS course is not usable
   HOME_STABLE_T  = 3,      -- fix must stay ok this long for "ready" / home set without FM (s)
   MOVE_LOCK_T    = 1,      -- moving this long before home is set locks home (no FM only) (s)
@@ -101,6 +102,9 @@ M.LIMITS = {
   hapticStrength  = { min = 1, max = 3,  step = 1 },
 }
 
+-- Display unit systems the config may name (editor list and normalize check).
+M.UNIT_CHOICES = { "metric", "imperial" }
+
 M.CONFIG_PATH           = "/SCRIPTS/GPSHOMER/config.lua"
 M.CONFIG_SCHEMA_VERSION = 1
 
@@ -111,6 +115,7 @@ M.DEFAULTS = {
   homeMinSats    = M.PARAMS.HOME_MIN_SATS,
   haptic         = M.PARAMS.HAPTIC,
   hapticStrength = M.PARAMS.HAPTIC_STRENGTH,
+  units          = M.PARAMS.UNITS,
 }
 local DEFAULTS = M.DEFAULTS
 
@@ -152,6 +157,12 @@ end
 -- A boolean is kept as is; anything else falls back.
 local function boolOr(v, fallback)
   if type(v) == "boolean" then return v end
+  return fallback
+end
+
+-- A listed unit system is kept; anything else falls back.
+local function unitsOr(v, fallback)
+  for _, u in ipairs(M.UNIT_CHOICES) do if v == u then return v end end
   return fallback
 end
 
@@ -280,6 +291,7 @@ function M.normalizeConfig(cfg)
     haptic         = boolOr(cfg.haptic, DEFAULTS.haptic),
     hapticStrength = clampNum(cfg.hapticStrength,
                     L.hapticStrength.min, L.hapticStrength.max, DEFAULTS.hapticStrength),
+    units          = unitsOr(cfg.units, DEFAULTS.units),
     sounds = {
       ready = soundOr(snd.ready, nil),
       fix  = soundOr(snd.fix,  nil),
@@ -296,6 +308,7 @@ function M.applyConfigOverrides(cfg)
   M.PARAMS.HOME_MIN_SATS   = n.homeMinSats
   M.PARAMS.HAPTIC          = n.haptic
   M.PARAMS.HAPTIC_STRENGTH = n.hapticStrength
+  M.PARAMS.UNITS           = n.units
   for _, k in ipairs(M.SOUND_KEYS) do
     local v = n.sounds[k]
     if v == nil then v = M.SOUND_DEFAULTS[k] end

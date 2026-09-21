@@ -18,17 +18,19 @@
 --          -> home lies exactly south: H sits on the S letter (NorthUp)
 --   44-64  leg east at 40 km/h: bearing to home drifts 180 -> ~214 deg,
 --          the S letter comes back once the H has moved a letter width away
---   64-104 full circle (heading +9 deg/s) at 40 km/h
---   104-134 fly straight back towards home at 50 km/h
---   134-144 hover at home, speed 0           -> AT HOME again
---   144-150 sats drop to 2                   -> fix lost (announced after 3 s)
---   150-156 sats back to 9                   -> fix recovered
---   156-162 telemetry off                    -> ENDED
---   162    loop
+--   64-74  hover far out at 3 km/h, GPS course jumping around
+--          -> below COURSE_MIN_SPD: absolute bearing instead of the arrow
+--   74-114 full circle (heading +9 deg/s) at 40 km/h
+--   114-144 fly straight back towards home at 50 km/h
+--   144-154 hover at home, speed 0           -> AT HOME again
+--   154-160 sats drop to 2                   -> fix lost (announced after 3 s)
+--   160-166 sats back to 9                   -> fix recovered
+--   166-172 telemetry off                    -> ENDED
+--   172    loop
 -- =====================================================================
 return function(core)
   local HOME_LAT, HOME_LON = 48.13745, 11.57518
-  local LOOP = 162
+  local LOOP = 172
   local t0
   local lat, lon = HOME_LAT, HOME_LON
   local lastT
@@ -59,17 +61,19 @@ return function(core)
       gspd, hdg, alt = math.min(40, (t - 14) * 5), 0, math.min(80, (t - 14) * 4)
     elseif t < 64 then
       gspd, hdg, alt = 40, 90, 80
-    elseif t < 104 then
-      gspd, hdg, alt = 40, (90 + (t - 64) * 9) % 360, 80
-    elseif t < 134 then
-      gspd, alt = 50, 80 - (t - 104) * 2
+    elseif t < 74 then
+      gspd, hdg, alt = 3, math.floor(t * 97) % 360, 80   -- hovering: course is GPS noise
+    elseif t < 114 then
+      gspd, hdg, alt = 40, (90 + (t - 74) * 9) % 360, 80
+    elseif t < 144 then
+      gspd, alt = 50, 80 - (t - 114) * 2
       hdg = core.bearingTo(lat, lon, HOME_LAT, HOME_LON)
       if core.haversine(lat, lon, HOME_LAT, HOME_LON) < 8 then gspd = 0 end   -- inside HOME_NEAR_M -> AT HOME
-    elseif t < 144 then
+    elseif t < 154 then
       gspd, alt = 0, 20
-    elseif t < 150 then
+    elseif t < 160 then
       sats, alt = 2, 20
-    elseif t < 156 then
+    elseif t < 166 then
       alt = 20                    -- sats back to 9 -> "GPS recovered"
     else
       telem = false

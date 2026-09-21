@@ -52,7 +52,7 @@ Which way is home? A model with GPS knows the answer at any moment, but the radi
 The widget shows:
 
 - **A home arrow** that points back to the launch position, seen from your current flight direction. Arrow up: keep going straight. Arrow down: turn around. Arrow left or right: turn that way. A compass ring around the arrow shows where north currently is.
-- **The same hint in words** (`ahead`, `behind`, `30 R`, ...) and the **distance to home** in metres.
+- **The same hint in words** (`ahead`, `behind`, `30 R`, ...) and the **distance to home** (metres, or feet with imperial units).
 - **The number of satellites** with a signal-style bar (red, yellow, green), plus altitude and ground speed.
 
 Everything happens automatically:
@@ -198,6 +198,7 @@ All settings are changed on the radio with the bundled **settings tool**. Make s
   - **Test**: plays the sound currently selected in that row (and the vibration, if enabled) so you can compare sounds on the spot.
   - **Haptic feedback**: `Off` (default) or `On`. When on, the radio vibrates with every event, independent of the sound, so a muted event still vibrates. GPS lost gives two pulses, every other event one.
   - **Haptic strength**: `Soft`, `Normal` or `Strong` (only shown while haptic feedback is on).
+  - **Units**: `Metric` (m, km/h, default) or `Imperial` (ft, mph). Altitude and speed are shown as the radio's sensors deliver them, so this only changes their labels; set the sensor units on the radio to match. The distance to home is computed from the coordinates and is converted to feet.
   - **Reset to defaults**: restores the factory settings.
 - **About**: version number and the file locations used by the project.
 
