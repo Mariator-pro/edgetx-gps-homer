@@ -203,12 +203,13 @@ end
 -- ---------------------------------------------------------------------------
 
 -- Brand header for the ACTIVE tile: accent square + "GPS-HOMER", SMLSIZE.
+local function headerW() return sx(5) + sx(3) + textW("GPS-HOMER", SMLSIZE) end
 local function drawHeader(x, y)
   local h  = fontH(SMLSIZE)
   local sq = sx(5)
   lcd.drawFilledRectangle(x, y + math.floor((h - sq) / 2), sq, sq, BRAND)
   dtext(x + sq + sx(3), y, "GPS-HOMER", BRAND, SMLSIZE)
-  return sq + sx(3) + textW("GPS-HOMER", SMLSIZE)
+  return headerW()
 end
 
 -- Decorative googly eyes beside the brand heading (error tiles only): pupils
@@ -469,7 +470,8 @@ end
 -- direction, the arrow is the steering hint to home, the ring turns with the
 -- course. 2 North up = map style, the ring is fixed, the arrow is the course
 -- and an "H" outside the ring marks the bearing to home; a cardinal letter
--- that would sit under the H is left out.
+-- that would sit under the H is left out. Boxes too small for a ring keep the
+-- map style with a home dot on the rim (see drawDirection).
 local function drawCompassArrow(cx, cy, R, d, compact)
   local r = math.floor(R * 0.55)
   if NORTH_UP then
@@ -648,15 +650,17 @@ end
 -- arrow shrinks and the label goes below (never in SMALL, which has no label).
 -- Ring without arrow or H plus a status line where "HOME <rel>" normally sits:
 -- READY ("READY TO FLY" / "NO HOME") and standing on the home point ("AT HOME").
--- SMALL has no room for the ring: the short word alone, as large as fits.
+-- SMALL has no room for the ring: the word alone, centred, in SMLSIZE.
 local function drawRingStatus(x0, top, W, boxH, d, rCap, small, txt, short, col, house)
   local cx    = x0 + math.floor(W / 2)
   local smlH  = fontH(SMLSIZE)
   local areaH = boxH - smlH - sx(2)
   local R, compact = ringFit(W, areaH, rCap)
   if small then
-    local f = fitFont("NO HOME", math.floor(W * 0.95), boxH, DBLSIZE)
-    dtext(x0 + math.floor((W - textW(short, f)) / 2), top + math.floor((boxH - fontH(f)) / 2), short, col, f)
+    -- Same SMLSIZE as the arrow's label so the box does not jump between
+    -- states; the long form when it fits, else the short word.
+    if textW(txt, SMLSIZE) > W then txt = short end
+    dtext(x0 + math.floor((W - textW(txt, SMLSIZE)) / 2), top + math.floor((boxH - smlH) / 2), txt, col, SMLSIZE)
     return
   end
   -- Status as the bottom line of the box (level with the last list row);
@@ -709,9 +713,26 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
       end
       return
     end
-    -- No room for the ring: arrow only, label below (or beside in SMALL).
+    -- No room for the lettered ring: arrow (in SMALL inside a bare band when
+    -- it fits), label below (or beside in SMALL).
     local r = math.min(math.floor(math.min(boxH, W) / 2), rCap)
     if r < sx(8) then r = sx(8) end
+    if small then
+      -- Ring and label centred as one group; the label slot is measured from
+      -- the "180 R" reference so the group does not shift with the value.
+      local avail, refW = W - 2 * r - GAP, textW("180 R", SMLSIZE)
+      local lw = 0
+      if lbl ~= "" and refW <= avail then
+        if 2 * smlH + sx(1) <= 2 * r then
+          lw = math.max(textW("HOME", SMLSIZE), refW)
+        elseif textW("HOME", SMLSIZE) + LABEL_GAP + refW <= avail then
+          lw = textW("HOME", SMLSIZE) + LABEL_GAP + refW
+        else
+          lw = refW
+        end
+      end
+      cx = x0 + math.floor((W - 2 * r - (lw > 0 and GAP + lw or 0)) / 2) + r
+    end
     local side = x0 + W - (cx + r) - GAP
     if lbl ~= "" and not small and boxH - smlH - sx(2) >= 2 * sx(8) then
       -- Label below the arrow (list layout); the arrow gives up the label height.
@@ -719,10 +740,32 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
       cy = top + math.floor((boxH - smlH - sx(2)) / 2)
       dtext(x0 + math.floor((W - textW(lbl, SMLSIZE)) / 2), top + boxH - smlH, lbl, COLORS.fg, SMLSIZE)
     elseif lbl ~= "" and textW("180 R", SMLSIZE) <= side then
-      local f = fitFont("180 R", side, 2 * r)
-      dtext(cx + r + GAP, cy - math.floor(fontH(f) / 2), lbl, COLORS.fg, f)
+      -- Beside the arrow: muted "HOME" caption over the value when two lines
+      -- fit the arrow height, else on one line, else the value alone.
+      local lx, cw = cx + r + GAP, textW("HOME", SMLSIZE) + LABEL_GAP
+      if 2 * smlH + sx(1) <= 2 * r then
+        dtext(lx, cy - smlH - math.floor(sx(1) / 2), "HOME", COLORS.muted, SMLSIZE)
+        dtext(lx, cy + math.ceil(sx(1) / 2), lbl, COLORS.fg, SMLSIZE)
+      elseif cw + textW("180 R", SMLSIZE) <= side then
+        dtext(lx, cy - math.floor(smlH / 2), "HOME", COLORS.muted, SMLSIZE)
+        dtext(lx + cw, cy - math.floor(smlH / 2), lbl, COLORS.fg, SMLSIZE)
+      else
+        dtext(lx, cy - math.floor(smlH / 2), lbl, COLORS.fg, SMLSIZE)
+      end
     end
-    drawArrow(cx, cy, r, d.rel, COLORS.fg)
+    if small and r >= sx(12) then
+      -- Bare compass band around the arrow (no letters); North up puts the
+      -- home dot on the band.
+      drawCompassArrow(cx, cy, r - sx(1), d, true)
+    elseif NORTH_UP and d.bearingToHome then
+      -- Map style without a ring: course arrow, home as a dot on the rim.
+      local dr = RING_W + sx(1)
+      local hx, hy = rot(cx, cy, r - dr, d.bearingToHome, 0)
+      lcd.drawFilledCircle(hx, hy, dr, COLORS.fg)
+      drawArrow(cx, cy, r - 2 * dr - sx(1), d.course or 0, COLORS.fg)
+    else
+      drawArrow(cx, cy, r, d.rel, COLORS.fg)
+    end
   else
     -- Course invalid: absolute home direction instead of the arrow (FR-10).
     -- Fonts sized from fixed references so nothing jumps with the value.
@@ -784,14 +827,45 @@ local function drawActiveMedium(W, H, x0, y0, d)
   drawDirection(bx, top, x0 + W - bx, y0 + H - top, d, sx(60), false)
 end
 
--- The whole ACTIVE tile: FULL, MEDIUM, or only the arrow (SMALL).
+-- The whole ACTIVE tile: FULL, MEDIUM, or SMALL. SMALL degrades by the text
+-- lines that fit: header once two fit, an ALT row under the sats count once
+-- three fit, the sats block (count, caption, bars) always. The arrow gets
+-- whichever layout leaves it larger: stacked (header,
+-- sats, ALT, arrow below over the full width) or side by side (header, sats
+-- and ALT in a left column, arrow right of it over the full height; the short
+-- title leaves that room). The sats count takes the largest font (up to
+-- MIDSIZE) that fits half the width and its band.
 local function drawActive(W, H, x0, y0, d)
   if activeFitsFull(W, H) then
     drawActiveFull(W, H, x0, y0, d)
   elseif activeFitsMedium(W, H) then
     drawActiveMedium(W, H, x0, y0, d)
   else
-    drawDirection(x0, y0, W, H, d, math.floor(math.min(W, H) / 2), true)
+    local smlH  = fontH(SMLSIZE)
+    local nRows = math.floor((H + sx(1)) / (smlH + sx(1)))
+    local hdr   = (nRows >= 2) and (smlH + sx(1)) or 0
+    local altH  = (nRows >= 3) and (smlH + sx(1)) or 0
+    local altR  = LIST_ROWS[1]
+    local altW  = (altH > 0) and (textW(altR.label, SMLSIZE) + LABEL_GAP + valueUnitW(altR.ref, altR.unit, LIST_FONT)) or 0
+    local bfS   = fitFont("99", math.floor(W * 0.5), H - hdr - altH, MIDSIZE)
+    local colW  = math.max(hdr > 0 and headerW() or 0, satsBlockW(bfS), altW)
+    local rSide = math.floor(math.min(W - colW - GAP, H) / 2)
+    local bfT   = fitFont("99", math.floor(W * 0.5), math.floor((H - hdr - altH - sx(2)) * 0.5), MIDSIZE)
+    local satsH = fontH(bfT) + sx(1)
+    local rTop  = math.floor(math.min(W, H - hdr - satsH - altH) / 2)
+    if hdr > 0 then drawHeader(x0, y0) end
+    if rSide >= rTop then
+      -- Sats under the header (centred in the column when there is no ALT row),
+      -- ALT on the bottom edge, arrow box right of the column.
+      local sy = (altH > 0) and (y0 + hdr) or (y0 + hdr + math.floor((H - hdr - fontH(bfS)) / 2))
+      drawSatsBlock(x0, sy, colW, bfS, d)
+      if altH > 0 then drawList(x0, y0 + H, colW, { altR }, smlH, d) end
+      drawDirection(x0 + colW + GAP, y0, W - colW - GAP, H, d, rSide, true)
+    else
+      drawSatsBlock(x0, y0 + hdr, W, bfT, d)
+      if altH > 0 then drawList(x0, y0 + hdr + satsH + smlH, W, { altR }, smlH, d) end
+      drawDirection(x0, y0 + hdr + satsH + altH, W, H - hdr - satsH - altH, d, rTop, true)
+    end
   end
 end
 
