@@ -79,6 +79,8 @@ M.PARAMS = {
   HAPTIC_STRENGTH = 2,     -- Pulse-length tier: 1 = soft, 2 = normal, 3 = strong
   UNITS           = "metric", -- display units: "metric" (m, km/h) or "imperial" (ft, mph); config: units
   COURSE_MIN_SPD = 6,      -- FR-10: km/h below which the GPS course is not usable
+  COURSE_HYST    = 1,      -- km/h either side of COURSE_MIN_SPD before the course flips
+  COURSE_HOLD_T  = 1,      -- speed must stay beyond the hysteresis band this long (s)
   HOME_STABLE_T  = 3,      -- fix must stay ok this long for "ready" / home set without FM (s)
   MOVE_LOCK_T    = 1,      -- moving this long before home is set locks home (no FM only) (s)
   HOME_NEAR_M    = 15,     -- closer than this: "at home", no arrow / bearing (m)
@@ -266,9 +268,25 @@ function M.sectorOf(bearing)
   return SECTORS[math.floor((bearing % 360 + 22.5) / 45) % 8 + 1]
 end
 
--- The GPS course is only meaningful above a minimum ground speed.
-function M.courseValid(gspd)
-  return (gspd or 0) >= M.PARAMS.COURSE_MIN_SPD
+-- The GPS course is only meaningful above a minimum ground speed. Debounced so
+-- the arrow does not flicker while hovering near the threshold: it turns on
+-- once the speed has stayed >= COURSE_MIN_SPD + COURSE_HYST for COURSE_HOLD_T,
+-- off once it has stayed < COURSE_MIN_SPD - COURSE_HYST that long; inside the
+-- band (or before the hold elapses) the last decision holds.
+function M.updateCourseValid(state, gspd, now)
+  local P, want = M.PARAMS, nil
+  gspd = gspd or 0
+  if gspd >= P.COURSE_MIN_SPD + P.COURSE_HYST then want = true
+  elseif gspd < P.COURSE_MIN_SPD - P.COURSE_HYST then want = false end
+  if want == nil or want == state.courseValid then
+    state.courseSince = nil
+  else
+    state.courseSince = state.courseSince or now
+    if now - state.courseSince >= P.COURSE_HOLD_T * 1000 then
+      state.courseValid, state.courseSince = want, nil
+    end
+  end
+  return state.courseValid
 end
 
 -- ---------------------------------------------------------------------------
@@ -434,6 +452,8 @@ function M.resetFlight(state)
   state.homeLocked       = false -- moved before home was set (no FM): no home this flight
   state.moveSince        = nil   -- movement timer for the lock
   state.lastArmed        = nil   -- last armed state (nil = not seen yet; no edge)
+  state.courseValid      = false -- debounced course validity (updateCourseValid)
+  state.courseSince      = nil
   state.readyAnnounced   = false
   state.homeAnnounced    = false
   state.fixLostAnnounced = false
@@ -589,7 +609,7 @@ function M.evaluate(state, snap, now)
       result.alt           = state.lastAlt
       result.gspd          = state.lastGspd
       result.fixLost       = not fixOk
-      result.courseValid   = M.courseValid(state.lastGspd or 0)
+      result.courseValid   = M.updateCourseValid(state, state.lastGspd, now)
       if result.courseValid then result.course = state.lastHdg or 0 end
       result.sensorMissing = snap.sensorMissing
       return result
@@ -626,7 +646,7 @@ function M.evaluate(state, snap, now)
     result.distanceM     = M.haversine(lat, lon, state.homeLat, state.homeLon)
     result.bearingToHome = M.bearingTo(lat, lon, state.homeLat, state.homeLon)
     result.sector        = M.sectorOf(result.bearingToHome)
-    result.courseValid   = M.courseValid(state.lastGspd or 0)
+    result.courseValid   = M.updateCourseValid(state, state.lastGspd, now)
     if result.courseValid then
       result.course = state.lastHdg or 0     -- GPS course, for the compass ring
       result.rel    = M.relAngle(result.bearingToHome, result.course)

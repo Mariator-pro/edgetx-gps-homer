@@ -266,9 +266,11 @@ local function drawCenteredLines(z, lines, topY, font)
 end
 
 -- Message tile (ENDED / errors): brand heading + up to three centered lines.
--- The heading is kept as long as possible; the message font shrinks first, the
--- heading is only dropped once even a small message no longer fits.
--- Priority (Spec 4.1): header+STD -> header+SML -> STD -> SML.
+-- The heading is kept as long as possible; the message font shrinks first,
+-- then (three lines: ENDED) the title line goes so the heading stays over the
+-- two position lines, and the heading is only dropped once even that no
+-- longer fits. Priority: header+STD -> header+SML -> header+2 SML -> STD -> SML
+-- -> 2 SML.
 -- eyes = mascot beside the heading (error tiles only).
 local function drawStatusTile(z, line1, line2, eyes, line3)
   local lines = { line1, line2, line3 }
@@ -280,10 +282,14 @@ local function drawStatusTile(z, line1, line2, eyes, line3)
     drawBrandHeading(eyes); drawCenteredLines(z, lines, hb, 0)
   elseif z.h - hb >= n * smlH then
     drawBrandHeading(eyes); drawCenteredLines(z, lines, hb, SMLSIZE)
+  elseif line3 and z.h - hb >= 2 * smlH then
+    drawBrandHeading(eyes); drawCenteredLines(z, { line2, line3 }, hb, SMLSIZE)
   elseif z.h >= n * stdH then
     drawCenteredLines(z, lines, 0, 0)
-  else
+  elseif z.h >= n * smlH or not line3 then
     drawCenteredLines(z, lines, 0, SMLSIZE)
+  else
+    drawCenteredLines(z, { line2, line3 }, 0, SMLSIZE)
   end
 end
 
@@ -401,6 +407,16 @@ local CARDINALS = { "N", "E", "S", "W" }
 local RING_W    = math.max(2, sx(2))   -- ring band thickness
 local TICK_LEN  = math.max(3, sx(4))   -- intercardinal tick length outside the ring
 
+-- Crosshair centred on (cx, cy): position known, heading not (hovering below
+-- the course threshold). Arms half the arrow radius, RING_W thick.
+local function drawCrosshair(cx, cy, r, col)
+  r = math.max(sx(3), math.floor(r / 2))
+  local t, h = RING_W, math.floor(RING_W / 2)
+  lcd.setColor(CUSTOM_COLOR, col)
+  lcd.drawFilledRectangle(cx - r, cy - h, 2 * r, t, CUSTOM_COLOR)
+  lcd.drawFilledRectangle(cx - h, cy - r, t, 2 * r, CUSTOM_COLOR)
+end
+
 -- Ring band: annulus when the build has it, else stacked circles. A full
 -- 0..360 annulus draws nothing (EdgeTX turns it into a zero-length arc), so
 -- the band is two half arcs; width = outer - inner radius.
@@ -432,13 +448,16 @@ end
 -- deg does the same.
 -- `compact`: the bare band (no letters, ticks or nose mark) for boxes too
 -- low for the letter margin, so the ring can use the whole box.
+-- `northUp` (optional): force the fixed map orientation without the nose mark
+-- (course unknown); defaults to the widget option.
 local NORTH_UP = false
-local function drawCompass(cx, cy, R, rotDeg, skipAng, compact)
+local function drawCompass(cx, cy, R, rotDeg, skipAng, compact, northUp)
+  if northUp == nil then northUp = NORTH_UP end
   drawRing(cx, cy, R)
   local tr = R + math.floor(fontH(SMLSIZE) / 2)   -- letters outside the ring
   local minSep = math.deg((textW("W", SMLSIZE) / 2 + fontH(SMLSIZE) / 2) / tr)
   if compact then return tr end
-  if not NORTH_UP then skipAng = 0; drawNoseMark(cx, cy, tr) end
+  if not northUp then skipAng = 0; drawNoseMark(cx, cy, tr) end
   for i, c in ipairs(CARDINALS) do
     local ang  = (i - 1) * 90 + rotDeg
     local diff = skipAng and math.abs(((ang - skipAng + 540) % 360) - 180) or 999
@@ -472,24 +491,36 @@ end
 -- and an "H" outside the ring marks the bearing to home; a cardinal letter
 -- that would sit under the H is left out. Boxes too small for a ring keep the
 -- map style with a home dot on the rim (see drawDirection).
+-- Home marker on a north-up ring: an H badge outside on the letter radius, or
+-- (compact: no room outside) a filled dot on the band.
+local function drawHomeMark(cx, cy, R, tr, bearing, compact)
+  if not bearing then return end
+  if compact then
+    local hx, hy = rot(cx, cy, R - math.floor(RING_W / 2), bearing, 0)
+    lcd.drawFilledCircle(hx, hy, RING_W + sx(1), COLORS.fg)
+    return
+  end
+  -- H in a thin circle so the marker reads as a badge, not a fifth letter.
+  if lcd.drawCircle then
+    local hx, hy = rot(cx, cy, tr, bearing, 0)
+    lcd.setColor(CUSTOM_COLOR, COLORS.fg)
+    lcd.drawCircle(hx, hy, math.floor(fontH(SMLSIZE) / 2) - sx(1), CUSTOM_COLOR)
+  end
+  drawRingText(cx, cy, tr, bearing, "H", COLORS.fg)
+end
+
+-- Course unknown (hovering): the ring holds north up in both modes, the H
+-- marks the bearing to home and a crosshair replaces the arrow.
 local function drawCompassArrow(cx, cy, R, d, compact)
   local r = math.floor(R * 0.55)
-  if NORTH_UP then
+  if not d.courseValid then
+    local tr = drawCompass(cx, cy, R, 0, d.bearingToHome, compact, true)
+    drawHomeMark(cx, cy, R, tr, d.bearingToHome, compact)
+    drawCrosshair(cx, cy, r, COLORS.fg)
+  elseif NORTH_UP then
     local tr = drawCompass(cx, cy, R, 0, d.bearingToHome, compact)
     drawArrow(cx, cy, r, d.course or 0, COLORS.fg)
-    if d.bearingToHome and compact then
-      -- No room for the badge outside: a filled dot on the band marks home.
-      local hx, hy = rot(cx, cy, R - math.floor(RING_W / 2), d.bearingToHome, 0)
-      lcd.drawFilledCircle(hx, hy, RING_W + sx(1), COLORS.fg)
-    elseif d.bearingToHome then
-      -- H in a thin circle so the marker reads as a badge, not a fifth letter.
-      if lcd.drawCircle then
-        local hx, hy = rot(cx, cy, tr, d.bearingToHome, 0)
-        lcd.setColor(CUSTOM_COLOR, COLORS.fg)
-        lcd.drawCircle(hx, hy, math.floor(fontH(SMLSIZE) / 2) - sx(1), CUSTOM_COLOR)
-      end
-      drawRingText(cx, cy, tr, d.bearingToHome, "H", COLORS.fg)
-    end
+    drawHomeMark(cx, cy, R, tr, d.bearingToHome, compact)
   else
     drawCompass(cx, cy, R, -(d.course or 0), nil, compact)
     drawArrow(cx, cy, r, d.rel, COLORS.fg)
@@ -698,8 +729,17 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
     drawRingStatus(x0, top, W, boxH, d, rCap, small, "AT HOME", "AT HOME", COLORS.muted, true)
     return
   end
-  if d.courseValid and d.rel then
-    local lbl  = relLabel(d.rel)
+  do
+    -- Label under / beside the ring: the steering hint ("30 R") with a valid
+    -- course, else the absolute bearing to home ("SW 220\194\176"). `ref` is the
+    -- widest value of each kind, so the slot never shifts with the number.
+    local lbl, ref
+    if d.courseValid and d.rel then
+      lbl, ref = relLabel(d.rel), "180 R"
+    else
+      lbl = string.format("%s %d\194\176", d.sector or "?", math.floor((d.bearingToHome or 0) + 0.5))
+      ref = "NW 360\194\176"
+    end
     local smlH = fontH(SMLSIZE)
     -- Compass ring + arrow inside (55 % of the ring), degree label at the box
     -- bottom.
@@ -726,7 +766,7 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
     if small then
       -- Ring and label centred as one group; the label slot is measured from
       -- the "180 R" reference so the group does not shift with the value.
-      local avail, refW = W - 2 * r - GAP, textW("180 R", SMLSIZE)
+      local avail, refW = W - 2 * r - GAP, textW(ref, SMLSIZE)
       local lw = 0
       if lbl ~= "" and refW <= avail then
         if 2 * smlH + sx(1) <= 2 * r then
@@ -745,14 +785,14 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
       r  = math.min(r, math.floor((boxH - smlH - sx(2)) / 2))
       cy = top + math.floor((boxH - smlH - sx(2)) / 2)
       dtext(x0 + math.floor((W - textW(lbl, SMLSIZE)) / 2), top + boxH - smlH, lbl, COLORS.fg, SMLSIZE)
-    elseif lbl ~= "" and textW("180 R", SMLSIZE) <= side then
+    elseif lbl ~= "" and textW(ref, SMLSIZE) <= side then
       -- Beside the arrow: muted "HOME" caption over the value when two lines
       -- fit the arrow height, else on one line, else the value alone.
       local lx, cw = cx + r + GAP, textW("HOME", SMLSIZE) + LABEL_GAP
       if 2 * smlH + sx(1) <= 2 * r then
         dtext(lx, cy - smlH - math.floor(sx(1) / 2), "HOME", COLORS.muted, SMLSIZE)
         dtext(lx, cy + math.ceil(sx(1) / 2), lbl, COLORS.fg, SMLSIZE)
-      elseif cw + textW("180 R", SMLSIZE) <= side then
+      elseif cw + textW(ref, SMLSIZE) <= side then
         dtext(lx, cy - math.floor(smlH / 2), "HOME", COLORS.muted, SMLSIZE)
         dtext(lx + cw, cy - math.floor(smlH / 2), lbl, COLORS.fg, SMLSIZE)
       else
@@ -763,33 +803,21 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
       -- Bare compass band around the arrow (no letters); North up puts the
       -- home dot on the band.
       drawCompassArrow(cx, cy, r - sx(1), d, true)
-    elseif NORTH_UP and d.bearingToHome then
-      -- Map style without a ring: course arrow, home as a dot on the rim.
+    elseif (NORTH_UP or not d.courseValid) and d.bearingToHome then
+      -- Map style without a ring: course arrow (crosshair without a course),
+      -- home as a dot on the rim.
       local dr = RING_W + sx(1)
       local hx, hy = rot(cx, cy, r - dr, d.bearingToHome, 0)
       lcd.drawFilledCircle(hx, hy, dr, COLORS.fg)
-      drawArrow(cx, cy, r - 2 * dr - sx(1), d.course or 0, COLORS.fg)
-    else
+      if d.courseValid then
+        drawArrow(cx, cy, r - 2 * dr - sx(1), d.course or 0, COLORS.fg)
+      else
+        drawCrosshair(cx, cy, r - 2 * dr - sx(1), COLORS.fg)
+      end
+    elseif d.courseValid then
       drawArrow(cx, cy, r, d.rel, COLORS.fg)
-    end
-  else
-    -- Course invalid: absolute home direction instead of the arrow (FR-10).
-    -- Fonts sized from fixed references so nothing jumps with the value.
-    local sec = d.sector or "?"
-    local deg = math.floor((d.bearingToHome or 0) + 0.5)
-    if small then
-      local txt = string.format("%s %d", sec, deg)
-      local f   = fitFont("SW 220", math.floor(W * 0.95), boxH, DBLSIZE)
-      dtext(x0 + math.floor((W - textW(txt, f)) / 2),
-            top + math.floor((boxH - fontH(f)) / 2), txt, COLORS.fg, f)
     else
-      -- Sector big, "220 deg" in SMLSIZE below, both centred in the box.
-      local sub  = string.format("%d deg", deg)
-      local smlH = fontH(SMLSIZE)
-      local f    = fitFont("SW", math.floor(W * 0.95), boxH - smlH - sx(2), DBLSIZE)
-      local ty   = top + math.floor((boxH - (fontH(f) + sx(2) + smlH)) / 2)
-      dtext(x0 + math.floor((W - textW(sec, f)) / 2), ty, sec, COLORS.fg, f)
-      dtext(x0 + math.floor((W - textW(sub, SMLSIZE)) / 2), ty + fontH(f) + sx(2), sub, COLORS.fg, SMLSIZE)
+      drawCrosshair(cx, cy, r, COLORS.fg)
     end
   end
 end

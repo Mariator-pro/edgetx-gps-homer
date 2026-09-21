@@ -73,7 +73,7 @@ Everything happens automatically:
   - **Required:** `GPS` (position), `Sats` (satellite count), `GSpd` (ground speed), `Hdg` (course over ground)
   - **Optional:** `FM` (flight mode; tells the widget whether the model is armed so home is set at arming; without it home is set at the first stable fix), `Alt` or `GAlt` (altitude, display only) and `RQly` (link quality; if it is missing, the radio's own RSSI is used to detect a lost link)
 
-The flight direction is taken from the GPS course over ground, which only exists while the model is moving. That is why the arrow needs a minimum ground speed of 6 km/h.
+The flight direction is taken from the GPS course over ground, which only exists while the model is moving. That is why the arrow needs a minimum ground speed of 6 km/h (with 1 km/h of hysteresis and a one second hold, so it does not flicker while hovering at that speed).
 
 ---
 
