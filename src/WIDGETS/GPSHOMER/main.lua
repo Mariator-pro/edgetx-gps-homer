@@ -176,16 +176,9 @@ local function fmtDist(m)
   return string.format("%d", math.floor(m + 0.5))
 end
 
--- Decimal degrees -> 41\194\17637'18.56"N (degree sign as UTF-8 bytes, the only
--- non-ASCII glyph; EdgeTX renders it in its own GPS sensor view). Rounded to
--- 1/100 s in integer math so seconds can never print as 60.00.
-local function dms(v, pos, neg)
-  local hemi = (v < 0) and neg or pos
-  local t = math.floor(math.abs(v) * 360000 + 0.5)   -- hundredths of a second
-  local d = math.floor(t / 360000); t = t - d * 360000
-  local m = math.floor(t / 6000);   t = t - m * 6000
-  return string.format("%d\194\176%02d'%05.2f\"%s", d, m, t / 100, hemi)
-end
+-- Shared with the tool, so both read identically. Guarded like every other
+-- core lookup here: without core the widget only draws the reinstall tile.
+local dms = core and core.formatDMS
 
 -- Degree label from the nose-relative angle. Thresholds come from core.PARAMS
 -- (never hard-coded): |rel| <= AHEAD_DEG -> "ahead", >= BEHIND_DEG -> "behind",

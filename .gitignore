@@ -40,6 +40,7 @@ src/RADIO
 
 # Runtime data
 config.lua
+flights.lua
 # Sibling widgets copied in for side-by-side simulator comparison only
 src/WIDGETS/SNTNL/
 src/SCRIPTS/SNTNL/

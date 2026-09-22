@@ -55,6 +55,8 @@ local PATHS = {
   config    = core.CONFIG_PATH,
   soundDir  = core.SOUND_DIR,                          -- trailing slash: prefix for playFile
   soundList = string.gsub(core.SOUND_DIR, "/$", ""),   -- no trailing slash: passed to dir()
+  flights   = core.FLIGHTS_PATH,
+  qr        = "/SCRIPTS/GPSHOMER/qr.lua",
   widget    = "/WIDGETS/GPSHOMER/main.lua",
   tool      = "/SCRIPTS/TOOLS/GPSHOMER.lua",
 }
@@ -123,34 +125,8 @@ local function serialize(value, indent)
   return "nil"
 end
 
--- Reads a whole file (block reads; "a" format is not on every build), or nil.
-local function readFile(path)
-  local ok, f = pcall(io.open, path, "r")
-  if not ok or not f then return nil end
-  local parts = {}
-  while true do
-    local rok, chunk = pcall(io.read, f, 4096)
-    if not rok or not chunk or chunk == "" then break end
-    parts[#parts + 1] = chunk
-  end
-  pcall(io.close, f)
-  return table.concat(parts)
-end
-
--- io.open "w" does NOT truncate on some EdgeTX/SD builds, so a shorter write
--- would leave the old tail behind -- pad with trailing newlines (valid after the
--- table) up to the old length. Pcall-wrapped so a full/read-only SD never raises.
-local function writeFile(path, content)
-  local old = readFile(path)
-  if old and #old > #content then
-    content = content .. string.rep("\n", #old - #content)
-  end
-  local ok, f = pcall(io.open, path, "w")
-  if not ok or not f then return false end
-  local wok = pcall(io.write, f, content)
-  pcall(io.close, f)
-  return wok == true
-end
+-- Reading and writing files lives in core, which needs it for the flight log.
+local writeFile = core.writeFile
 
 -- ---------------------------------------------------------------------------
 -- Config load / default / save
@@ -259,6 +235,7 @@ local SCREEN = {
   CONFIG_ERROR = "config_error",
   MAIN         = "main",
   SETTINGS     = "settings",
+  FLIGHTS      = "flights",
   ABOUT        = "about",
 }
 
@@ -278,6 +255,11 @@ local S = {
   setOrig    = nil,
   setDive    = nil,  -- focused event row (1..#EVENTS), or nil at top level
   setSub     = "snd",
+  -- Last-flights viewer
+  flights    = nil,  -- entries as core.readFlights returns them, newest first
+  flightIdx  = 1,
+  qrUrl      = nil,  -- URL the cached runs belong to
+  qrRuns     = nil,  -- dark runs of the current symbol, or false when it failed
 }
 
 -- ---------------------------------------------------------------------------
@@ -394,6 +376,16 @@ local function drawButton(x, y, label, focused, disabled)
 end
 
 -- Bottom action bar; `firstItem` is the cursor index of labels[1].
+-- A blue chip with the key name plus its action label at (x, y); returns the
+-- next x. Used where a key's effect is not self-evident from the screen.
+local function drawKeyChip(x, y, key, action)
+  local kw, kh = lcd.sizeText(key)
+  lcd.drawFilledRectangle(x, y - 1, kw + 4, kh + 2, COLOR_THEME_FOCUS)
+  lcd.drawText(x + 2, y, key, COLOR_THEME_PRIMARY2)
+  lcd.drawText(x + kw + 8, y, action, COLOR_THEME_PRIMARY1)
+  return x + kw + 8 + lcd.sizeText(action)
+end
+
 local function drawButtonBar(labels, firstItem, cursor)
   local sepY = barTopY()
   local btnY = sepY + BTN_GAP
@@ -605,12 +597,17 @@ local function withRetry(writeFn, onDone)
   end
 end
 
--- Overwrites config.lua with factory defaults and clears any parse/schema error.
+-- Overwrites config.lua with factory defaults, empties the flight log and
+-- clears any parse/schema error. A log that cannot be written (missing or
+-- read-only card) does not fail the reset: the settings are what matters.
 local function resetConfig(onDone)
   local fresh = defaultConfig()
   withRetry(function() return saveConfig(fresh) end, function()
     S.cfg              = fresh
     S.err, S.errDetail = nil, nil
+    pcall(core.clearFlights)
+    S.flights, S.flightIdx = nil, 1
+    S.qrUrl, S.qrRuns      = nil, nil
     if onDone then onDone() end
   end)
 end
@@ -637,7 +634,7 @@ local function handleConfigError(e)
   S.cursor = moveCursor(S.cursor, e, 2)
   if isEnter(e) then
     if S.cursor == 1 then
-      openDialog("Reset settings to factory defaults?",
+      openDialog("Reset settings and clear the flight log?",
                  function() resetConfig(function() S.screen = SCREEN.MAIN; S.cursor = 1 end) end)
     else
       return 1
@@ -652,7 +649,7 @@ end
 -- Screen: main menu
 -- ---------------------------------------------------------------------------
 
-local MAIN_ITEMS = { "Settings", "About" }
+local MAIN_ITEMS = { "Settings", "Last flights", "About" }
 
 local function drawMain()
   drawHeader("GPS HOMER - SETUP")
@@ -678,18 +675,134 @@ local function enterSettings()
   S.screen     = SCREEN.SETTINGS
 end
 
+local enterFlights   -- defined with the flights screen, below
+
 local function handleMain(e)
   S.cursor = moveCursor(S.cursor, e, #MAIN_ITEMS + 1)
   if isEnter(e) then
     if S.cursor > #MAIN_ITEMS then return 1 end   -- Exit button closes the tool
-    if MAIN_ITEMS[S.cursor] == "Settings" then
+    local item = MAIN_ITEMS[S.cursor]
+    if item == "Settings" then
       enterSettings()
+    elseif item == "Last flights" then
+      enterFlights()
     else
       S.screen = SCREEN.ABOUT
       S.cursor = 1
     end
   elseif isExit(e) then
     return 1
+  end
+  return 0
+end
+
+-- ---------------------------------------------------------------------------
+-- Screen: Last flights -- where the model was when the telemetry ended, as
+-- text and as a map QR code to scan with a phone.
+-- ---------------------------------------------------------------------------
+
+-- The encoder is only needed here, so it is loaded on first use and kept.
+-- false marks a failed load, which turns into a hint instead of a retry loop.
+local qr = nil
+local function qrModule()
+  if qr == nil then
+    local chunk = loadScript and loadScript(PATHS.qr)
+    local ok, mod = false, nil
+    if chunk then ok, mod = pcall(chunk) end
+    qr = (ok and type(mod) == "table") and mod or false
+  end
+  return qr
+end
+
+function enterFlights()          -- fills the local declared above
+  S.flights   = core.readFlights()
+  S.flightIdx = 1
+  S.qrUrl, S.qrRuns = nil, nil
+  S.screen    = SCREEN.FLIGHTS
+  S.cursor    = 1
+end
+
+-- Encodes the entry's map link once and caches the dark runs: rebuilding the
+-- symbol every frame would be far too slow.
+local function flightRuns(entry)
+  local url = core.mapUrl(entry.lat, entry.lon)
+  if S.qrUrl ~= url then
+    S.qrUrl = url
+    local mod  = qrModule()
+    local code = mod and mod.encode(url)
+    S.qrRuns   = code and mod.runs(code) or false
+  end
+  return S.qrRuns
+end
+
+local QR_QUIET = 4   -- modules of light margin the scanner needs on each side
+
+local function drawFlightCode(entry, x0, y0, box)
+  local mod = qrModule()
+  local runs = mod and flightRuns(entry)
+  if not runs then
+    lcd.drawText(x0, y0, "No QR code", COLOR_THEME_DISABLED)
+    return
+  end
+  local scale = math.max(1, math.floor(box / (mod.SIZE + 2 * QR_QUIET)))
+  local side  = (mod.SIZE + 2 * QR_QUIET) * scale
+  local qx, qy = x0 + box - side, y0
+  lcd.drawFilledRectangle(qx, qy, side, side, lcd.RGB(255, 255, 255))
+  local dark = lcd.RGB(0, 0, 0)
+  local ox, oy = qx + QR_QUIET * scale, qy + QR_QUIET * scale
+  for _, run in ipairs(runs) do
+    lcd.drawFilledRectangle(ox + (run[2] - 1) * scale, oy + (run[1] - 1) * scale,
+                            run[3] * scale, scale, dark)
+  end
+end
+
+local function drawFlights()
+  drawHeader("LAST FLIGHTS")
+  local n = #S.flights
+  if n == 0 then
+    lcd.drawText(COL1, bodyY(1), "No flight logged yet.", COLOR_THEME_PRIMARY1)
+    lcd.drawText(COL1, bodyY(2), "A position is stored when the", COLOR_THEME_DISABLED)
+    lcd.drawText(COL1, bodyY(3), "telemetry ends after a flight.", COLOR_THEME_DISABLED)
+    drawButtonBar({ "Back" }, 1, 1)
+    return
+  end
+
+  local entry = S.flights[S.flightIdx]
+  local box   = math.min(barTopY() - bodyY(1), math.floor(LCD_W * 0.46))
+  local qrX   = LCD_W - PAD - box
+  drawFlightCode(entry, qrX, bodyY(1), box)
+
+  local stamp = entry.date
+  if entry.time ~= "" then stamp = (stamp == "" and entry.time) or (stamp .. "  " .. entry.time) end
+  if stamp == "" then stamp = "no clock" end
+  local counter = S.flightIdx .. " / " .. n
+  lcd.drawText(COL1, bodyY(1), counter, COLOR_THEME_PRIMARY1 + BOLD)
+  if n > 1 then
+    -- Key hint beside the counter, dropped when it would run into the QR code.
+    local hintX = COL1 + lcd.sizeText(counter) + PAD * 2
+    local hintW = lcd.sizeText("ROLLER") + 8 + lcd.sizeText("older / newer")
+    if hintX + hintW <= qrX - PAD then
+      drawKeyChip(hintX, bodyY(1), "ROLLER", "older / newer")
+    end
+  end
+  lcd.drawText(COL1, bodyY(2), stamp, COLOR_THEME_PRIMARY1)
+  if entry.model ~= "" then
+    lcd.drawText(COL1, bodyY(3), entry.model, COLOR_THEME_PRIMARY1)
+  end
+  lcd.drawText(COL1, bodyY(4), core.formatDMS(entry.lat, "N", "S"), COLOR_THEME_PRIMARY1)
+  lcd.drawText(COL1, bodyY(5), core.formatDMS(entry.lon, "E", "W"), COLOR_THEME_PRIMARY1)
+  drawButtonBar({ "Back" }, 1, 1)
+end
+
+local function handleFlights(e)
+  local n = #S.flights
+  if isNext(e) and S.flightIdx < n then
+    S.flightIdx = S.flightIdx + 1
+  elseif isPrev(e) and S.flightIdx > 1 then
+    S.flightIdx = S.flightIdx - 1
+  elseif isExit(e) or isEnter(e) then
+    S.screen = SCREEN.MAIN
+    S.cursor = 2
   end
   return 0
 end
@@ -712,11 +825,13 @@ local ABOUT = (function()
   lines[#lines + 1] = "Schema version: " .. SCHEMA_VERSION
   lines[#lines + 1] = "File locations..."   -- last line: ENTER opens the path popup
   local pathItems = {
-    { "Core:",   CORE_PATH },
-    { "Config:", PATHS.config },
-    { "Widget:", PATHS.widget },
-    { "Tool:",   PATHS.tool },
-    { "Sounds:", PATHS.soundDir },
+    { "Core:",    CORE_PATH },
+    { "QR:",      PATHS.qr },
+    { "Config:",  PATHS.config },
+    { "Flights:", PATHS.flights },
+    { "Widget:",  PATHS.widget },
+    { "Tool:",    PATHS.tool },
+    { "Sounds:",  PATHS.soundDir },
   }
   return { lines = lines, pathItems = pathItems }
 end)()
@@ -971,7 +1086,7 @@ local function handleSettings(e)
     elseif S.cursor >= ROW_EV1 and S.cursor < ROW_HAPTIC then
       S.setDive, S.setSub = S.cursor, "snd"
     elseif S.cursor == ROW_RESET then
-      openDialog("Reset settings to factory defaults?",
+      openDialog("Reset settings and clear the flight log?",
                  function() resetConfig(function() enterSettings() end) end)
     elseif S.cursor == ROW_BACK then
       cancelSettings()
@@ -1011,6 +1126,7 @@ local function handleEvent(event)
   if S.picker then handlePicker(event); return 0 end
   if S.screen == SCREEN.CONFIG_ERROR then return handleConfigError(event) end
   if S.screen == SCREEN.SETTINGS     then return handleSettings(event)    end
+  if S.screen == SCREEN.FLIGHTS      then return handleFlights(event)     end
   if S.screen == SCREEN.ABOUT        then return handleAbout(event)       end
   return handleMain(event)
 end
@@ -1026,6 +1142,8 @@ local function draw()
     drawConfigError()
   elseif S.screen == SCREEN.SETTINGS then
     drawSettings()
+  elseif S.screen == SCREEN.FLIGHTS then
+    drawFlights()
   elseif S.screen == SCREEN.ABOUT then
     drawAbout()
   else

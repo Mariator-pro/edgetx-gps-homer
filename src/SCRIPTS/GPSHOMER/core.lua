@@ -11,7 +11,7 @@
 --   * the tools script       /SCRIPTS/TOOLS/GPSHOMER.lua    (configuration)
 --
 -- "core does everything except drawing": the hardware glue (getValue / playFile
--- / getTime / getRSSI) lives here exactly once; there are NO lcd.* calls and NO
+-- / getTime) lives here exactly once; there are NO lcd.* calls and NO
 -- mutable module state (the caller owns its state, so multiple widget instances
 -- never collide). The pure math functions are desktop-testable.
 -- =====================================================================
@@ -109,6 +109,15 @@ M.UNIT_CHOICES = { "metric", "imperial" }
 
 M.CONFIG_PATH           = "/SCRIPTS/GPSHOMER/config.lua"
 M.CONFIG_SCHEMA_VERSION = 1
+
+-- Flight log: the last position of the three most recent flights, written
+-- when a flight ends and read back by the tool. Separate from the config so the
+-- editor can rewrite settings without touching the log, and the other way
+-- round. The map URL plus six decimals stays inside the QR capacity.
+M.FLIGHTS_PATH           = "/SCRIPTS/GPSHOMER/flights.lua"
+M.FLIGHTS_SCHEMA_VERSION = 1
+M.FLIGHTS_MAX            = 3
+M.MAP_URL                = "https://maps.google.com/?q="
 
 -- Snapshot of the factory defaults for the overridable params, taken before
 -- any config overlay. This is what the tool reads for "Reset to defaults" and
@@ -352,12 +361,125 @@ end
 pcall(loadConfigOnce)
 
 -- ---------------------------------------------------------------------------
+-- Files and the flight log
+-- ---------------------------------------------------------------------------
+
+-- Reads a whole file in blocks (the "a" format is not on every build), or nil.
+function M.readFile(path)
+  local ok, f = pcall(io.open, path, "r")
+  if not ok or not f then return nil end
+  local parts = {}
+  while true do
+    local rok, chunk = pcall(io.read, f, 4096)
+    if not rok or not chunk or chunk == "" then break end
+    parts[#parts + 1] = chunk
+  end
+  pcall(io.close, f)
+  return table.concat(parts)
+end
+
+-- io.open "w" does NOT truncate on some EdgeTX/SD builds, so a shorter write
+-- would leave the old tail behind -- pad with trailing newlines (valid after
+-- the returned table) up to the old length. Pcall-wrapped so a full or
+-- read-only SD card never raises.
+function M.writeFile(path, content)
+  local old = M.readFile(path)
+  if old and #old > #content then
+    content = content .. string.rep("\n", #old - #content)
+  end
+  local ok, f = pcall(io.open, path, "w")
+  if not ok or not f then return false end
+  local wok = pcall(io.write, f, content)
+  pcall(io.close, f)
+  return wok == true
+end
+
+-- Logged flights, newest first. A missing, unparsable or foreign-schema file
+-- reads as an empty log: it is a convenience, never flight critical.
+function M.readFlights()
+  local chunk = loadScript and loadScript(M.FLIGHTS_PATH)
+  if not chunk then return {} end
+  local ok, result = pcall(chunk)
+  if not ok or type(result) ~= "table" then return {} end
+  if result.schemaVersion ~= M.FLIGHTS_SCHEMA_VERSION then return {} end
+  local out = {}
+  for _, e in ipairs(result.flights or {}) do
+    if type(e) == "table" and type(e.lat) == "number" and type(e.lon) == "number" then
+      out[#out + 1] = { lat   = e.lat,
+                        lon   = e.lon,
+                        date  = tostring(e.date  or ""),
+                        time  = tostring(e.time  or ""),
+                        model = tostring(e.model or "") }
+    end
+  end
+  return out
+end
+
+local function writeFlights(flights)
+  local out = { "-- GPS Homer flight log (auto-generated).",
+                "return {",
+                "  schemaVersion = " .. M.FLIGHTS_SCHEMA_VERSION .. ",",
+                "  flights = {" }
+  for _, e in ipairs(flights) do
+    out[#out + 1] = string.format("    { lat = %.6f, lon = %.6f, date = %q, time = %q, model = %q },",
+                                  e.lat, e.lon, e.date, e.time, e.model)
+  end
+  out[#out + 1] = "  },"
+  out[#out + 1] = "}"
+  return M.writeFile(M.FLIGHTS_PATH, table.concat(out, "\n") .. "\n")
+end
+
+-- Empties the log. The file stays (an empty one reads as no flights), so the
+-- tool never has to delete a file to undo a log.
+function M.clearFlights()
+  return writeFlights({})
+end
+
+-- Prepends one position and keeps the newest FLIGHTS_MAX. Date, time and model
+-- name are best effort: the radio clock may be unset and the host tests have
+-- neither call. Returns true when the file was written.
+function M.logFlight(lat, lon)
+  local entry = { lat = lat, lon = lon, date = "", time = "", model = "" }
+
+  local ok, dt = pcall(function() return getDateTime() end)
+  if ok and type(dt) == "table" and dt.year then
+    entry.date = string.format("%04d-%02d-%02d", dt.year, dt.mon, dt.day)
+    entry.time = string.format("%02d:%02d", dt.hour, dt.min)
+  end
+  local mok, info = pcall(function() return model.getInfo() end)
+  if mok and type(info) == "table" and info.name then entry.model = tostring(info.name) end
+
+  local flights = M.readFlights()
+  table.insert(flights, 1, entry)
+  while #flights > M.FLIGHTS_MAX do table.remove(flights) end
+
+  return writeFlights(flights)
+end
+
+-- Decimal degrees -> 41\194\17637'18.56"N (degree sign as UTF-8 bytes, the only
+-- non-ASCII glyph; EdgeTX renders it in its own GPS sensor view). Rounded to
+-- 1/100 s in integer math so seconds can never print as 60.00. Shared, so the
+-- widget's end screen and the tool's flight log read identically.
+function M.formatDMS(v, pos, neg)
+  local hemi = (v < 0) and neg or pos
+  local t = math.floor(math.abs(v) * 360000 + 0.5)   -- hundredths of a second
+  local d = math.floor(t / 360000); t = t - d * 360000
+  local m = math.floor(t / 6000);   t = t - m * 6000
+  return string.format("%d\194\176%02d'%05.2f\"%s", d, m, t / 100, hemi)
+end
+
+-- Map link for a position, short enough for the QR symbol the tool draws.
+function M.mapUrl(lat, lon)
+  return string.format("%s%.6f,%.6f", M.MAP_URL, lat, lon)
+end
+
+-- ---------------------------------------------------------------------------
 -- Telemetry I/O -- the single place that reads all sensors raw.
 -- ---------------------------------------------------------------------------
 
--- The sensors the script cannot work without (all from the FC's GPS frame).
--- Alt is display-only and RQly has a fallback, so neither is mandatory.
-local REQUIRED = { "gps", "sats", "gspd", "hdg" }
+-- The sensors the script cannot work without (GPS frame + link quality).
+-- Alt is display-only, so it is not mandatory.
+local REQUIRED = { "gps", "sats", "gspd", "hdg", "rqly" }
 
 -- Armed state from Betaflight's CRSF flight-mode text (>= 4.0): while disarmed
 -- the string ends in "*" (ready), "!" (arming blocked) or "?" (rescue n/a);
@@ -386,19 +508,8 @@ function M.readSnapshot()
   local altName = sensorExists(S.galt) and S.galt or (sensorExists(S.alt) and S.alt) or nil
   local alt     = altName and M.validRange(safeGet(altName), -500, 10000) or nil
 
-  -- Online detection: RQly > 0 when the sensor exists; else fall back to the
-  -- radio RSSI; last resort a plausible GPS reading (3.2).
-  local telem
-  if sensorExists(S.rqly) then
-    telem = (safeGet(S.rqly) or 0) > 0
-  else
-    local ok, rssi = pcall(getRSSI)
-    if ok and type(rssi) == "number" then
-      telem = rssi > 0
-    else
-      telem = gps ~= nil
-    end
-  end
+  -- Online detection: link quality from the ELRS link statistics.
+  local telem = (safeGet(S.rqly) or 0) > 0
 
   local sensorMissing = false
   for _, k in ipairs(REQUIRED) do
@@ -496,6 +607,9 @@ function M.evaluate(state, snap, now)
       if now - state.linkLostSince >= P.LINK_LOSS_T * 1000 then
         state.status  = "ENDED"        -- freeze position, stay silent (FR-13)
         state.endedAt = now
+        if state.lastLat and state.lastLon then
+          pcall(M.logFlight, state.lastLat, state.lastLon)
+        end
       end
     elseif state.status == "ACQUIRING" or state.status == "READY" then
       if not state.linkLostSince then state.linkLostSince = now end

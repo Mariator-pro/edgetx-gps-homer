@@ -2,7 +2,7 @@
 
 ![edgetx-gps-homer: EdgeTX Lua widget showing direction and distance to home](docs/banner.png)
 
-GPS Homer puts a **home arrow on your radio**: a small EdgeTX widget that always shows **which way home is and how far away it is**. It works with the GPS data your flight controller already sends to the radio. The arrow points **relative to the direction you are flying**. On top of that the radio tells you by voice when the GPS is ready, when home has been set and when the GPS signal is lost or back.
+GPS Homer puts a **home arrow on your radio**: a small EdgeTX widget that shows **which way home is and how far away it is**, using the GPS data your flight controller already sends. On top of that the radio tells you by voice when the GPS is ready, when home has been set and when the GPS signal is lost or back.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![EdgeTX](https://img.shields.io/badge/EdgeTX-%E2%89%A5%202.11-brightgreen)](https://edgetx.org)
@@ -22,7 +22,6 @@ GPS Homer puts a **home arrow on your radio**: a small EdgeTX widget that always
 - [📥 Installation](#-installation)
 - [⚙️ Customizing](#️-customizing)
 - [🛠️ Troubleshooting](#️-troubleshooting)
-- [💡 Credits](#-credits)
 - [🤝 Contributing](#-contributing)
 - [⚠️ Disclaimer](#️-disclaimer)
 - [📄 License](#-license)
@@ -57,9 +56,9 @@ The widget shows:
 
 Everything happens automatically:
 
-- **Home is set on its own, exactly like in Betaflight.** Once the GPS has a solid fix for a few seconds the radio says "Ready to fly", and the moment you arm, the launch position is stored and the radio says "Home set". That is the same instant Betaflight sets its own home point, so the arrow on the radio and the arrow in the goggles always agree. Arm without a fix and there is no home for that flight, again just like Betaflight; land, disarm and arm again once the fix is there. (On a model that does not send its armed state, home is stored at the first stable fix instead.)
+- **Home is set on its own, exactly like in Betaflight.** Once the GPS has a solid fix for a few seconds the radio says "Ready to fly", and the moment you arm, the launch position is stored and the radio says "Home set". That is the same instant Betaflight sets its own home point, so the arrow on the radio and the arrow in the goggles always agree. (On a model that does not send its armed state, home is stored at the first stable fix instead.)
 - **Voice only when it matters.** The radio speaks on four events (ready to fly, home set, GPS signal lost, GPS signal back). There are no continuous announcements, and each event can be muted or replaced with your own sound file.
-- **Standing still or hovering slowly?** Without movement the GPS cannot tell which way the model is pointing, so the widget switches to the absolute direction instead (for example `SW 220°`). The arrow comes back as soon as the model moves.
+- **Standing still or hovering slowly?** The flight direction comes from the GPS course over ground, which only exists while the model is moving. Below 6 km/h the widget therefore switches to the absolute direction instead.
 - **Lost the link?** If the telemetry connection is gone for good (landed out of range, crash), the widget freezes and keeps showing the **last known GPS position** of the model to help you find it.
 
 ---
@@ -67,13 +66,13 @@ Everything happens automatically:
 ## 🧰 Requirements
 
 - A radio running **EdgeTX 2.11 or newer**. For the widget the radio needs a color display; for voice announcements only, any EdgeTX radio will do (see [Script variants](#-script-variants)).
-- A **Betaflight flight controller (4.0 or newer) with a GPS module**, with GPS telemetry enabled.
-- An **ExpressLRS receiver** with telemetry enabled.
+- A **Betaflight flight controller with a GPS module**, with GPS telemetry enabled.
+- An **ExpressLRS receiver (3.0 or newer)** with telemetry enabled.
 - The GPS data must be known to the radio as telemetry sensors. They appear on their own when you run a **telemetry discovery** (Model Settings → Telemetry → "Discover new sensors") while the GPS has a fix:
-  - **Required:** `GPS` (position), `Sats` (satellite count), `GSpd` (ground speed), `Hdg` (course over ground)
-  - **Optional:** `FM` (flight mode; tells the widget whether the model is armed so home is set at arming; without it home is set at the first stable fix), `Alt` or `GAlt` (altitude, display only) and `RQly` (link quality; if it is missing, the radio's own RSSI is used to detect a lost link)
-
-The flight direction is taken from the GPS course over ground, which only exists while the model is moving. That is why the arrow needs a minimum ground speed of 6 km/h (with 1 km/h of hysteresis and a one second hold, so it does not flicker while hovering at that speed).
+  - **Required:** `GPS` (position), `Sats` (satellite count), `GSpd` (ground speed), `Hdg` (course over ground), `RQly` (link quality, detects a lost link)
+  - **Optional:**
+    - `FM` (flight mode): sets home at arming; without it, home is set at the first stable fix
+    - `Alt` or `GAlt`: altitude, display only
 
 ---
 
@@ -91,7 +90,7 @@ GPS Homer comes in two variants. Both use the same logic and the same settings; 
   </thead>
   <tbody>
     <tr>
-      <td>Voice announcements (ready to fly, home set, GPS lost, GPS back) and vibration</td>
+      <td>Voice announcements and vibration</td>
       <td>✅</td>
       <td>✅</td>
     </tr>
@@ -102,8 +101,8 @@ GPS Homer comes in two variants. Both use the same logic and the same settings; 
     </tr>
     <tr>
       <td>Runs in the background</td>
-      <td>✅ (keeps announcing even while another screen is shown)</td>
-      <td>✅ (runs as a Special Function)</td>
+      <td>✅</td>
+      <td>✅</td>
     </tr>
     <tr>
       <td>Supported radios</td>
@@ -121,12 +120,13 @@ GPS Homer comes in two variants. Both use the same logic and the same settings; 
 
 ### 1. Copy the files to the SD card
 
-Take the SD card out of the radio (or connect the radio via USB as mass storage) and copy the folders below 1:1 into the root of the card. Copying everything is fine even if you only use one variant; you choose the variant in step 2.
+Copy the folders below 1:1 into the root of the SD card. Copying everything is fine even if you only use one variant; you choose the variant in step 2.
 
 ```
 SCRIPTS/
 ├── GPSHOMER/
-│   └── core.lua            ← shared logic (always required)
+│   ├── core.lua            ← shared logic (always required)
+│   └── qr.lua              ← QR code for the settings tool (optional)
 ├── FUNCTIONS/
 │   └── gpshom.lua          ← function-script variant (voice only)
 └── TOOLS/
@@ -146,14 +146,15 @@ SOUNDS/
 
 All files sit in the same folders in this repository. The sound files always live under `/SOUNDS/en/scripts/GPSHOMER/`, no matter which language your radio is set to.
 
+Two more files show up in `/SCRIPTS/GPSHOMER/` later, written by the radio itself and nothing you copy: `config.lua` holds your settings once you save them in the tool, and `flights.lua` holds the last three landing positions.
+
 ### 2a. Set up the widget
 
-1. Put the SD card back into the radio and switch it on.
-2. Open the model's **Telemetry / Display** setup (the page where you arrange the widget screens).
-3. Pick a free zone, add a widget and choose **GPS Homer** from the list.
-4. *(Optional)* Open the widget settings to adjust the look:
+1. Open the model's **Telemetry / Display** setup (the page where you arrange the widget screens).
+2. Pick a free zone, add a widget and choose **GPS Homer** from the list.
+3. *(Optional)* Open the widget settings to adjust the look:
    - **Theme**: `Dark` or `Light`.
-   - **Compass**: `NoseUp` (default) keeps your flight direction on top, the arrow points to home and the compass ring turns as you turn. `NorthUp` keeps north on top like a map, the arrow shows where you are flying and an `H` on the ring marks the direction to home.
+   - **Compass**: `NoseUp` (default): flight direction on top, the arrow points home. `NorthUp`: north on top like a map, an `H` on the ring marks home.
    - **Transparency**: how milky the background overlay is (light theme only).
    - **Accent**: color of the heading text: `Default` (green), `Theme` (the focus color of your EdgeTX theme) or `Custom` (pick any color under **AccentColor**).
 
@@ -167,23 +168,22 @@ All files sit in the same folders in this repository. The sound files always liv
 
 For radios without a color display, or if you only want the voice announcements:
 
-1. Put the SD card back into the radio and switch it on.
-2. Open the **Model Settings** and go to the **Special Functions** page (also called "SF").
-3. Pick a free slot and set it up like this:
+1. Open the **Model Settings** and go to the **Special Functions** page (also called "SF").
+2. Pick a free slot and set it up like this:
    - **Switch / Condition:** `On` (the script runs permanently in the background)
    - **Action:** `Lua Script`
    - **Value / Script:** `gpshom`
    - **Repeat:** `On`
    - **Enable:** `On`
-4. Leave the page; the settings are saved automatically.
+3. Leave the page; the settings are saved automatically.
 
 ### 3. Try it out
 
-- Power the model, wait for the GPS fix and check on the radio's telemetry page that `GPS`, `Sats`, `GSpd` and `Hdg` show values.
+- Power the model, wait for the GPS fix and check on the radio's telemetry page that `GPS`, `Sats`, `GSpd`, `Hdg` and `RQly` show values.
 - On the ground the widget shows `Searching satellites` with the satellite count and the number needed (for example `4 Sats (min 6)`). Once enough satellites are locked (6 by default) for a few seconds, the radio says "Ready to fly" and the widget switches to the live view with `READY TO FLY` under the compass ring; the home arrow and the distance are still missing.
 - Arm the model: the radio says "Home set", and the arrow, the `H` on the ring (NorthUp) and the distance appear.
-- Fly away from the launch position: the distance grows, and as soon as the model moves faster than 6 km/h the arrow appears and points back to the launch position.
-- Switch the model off: after a moment the widget shows `Flight ended` with the last known coordinates, and after one minute it returns to `Waiting for telemetry`.
+- Fly away from the launch position: the distance grows, and once you are flying the arrow appears and points back to the launch position.
+- Switch the model off: after a moment the widget shows `Flight ended` with the last known coordinates, and after one minute it returns to `Waiting for telemetry`. The position is kept in the flight log at that moment, so you can still call it up in the settings tool days later.
 - With the function script you only hear the announcements: "Ready to fly" once the fix is stable, "Home set" when you arm, "GPS lost" and "GPS recovered" while flying.
 
 ---
@@ -194,38 +194,30 @@ All settings are changed on the radio with the bundled **settings tool**. Make s
 
 - **Settings**
   - **Min sats**: how many satellites must be locked before home is set, **4 to 20** (default 6). A higher number gives a more accurate launch position but sets home a little later.
-  - **Sound** for each event (Ready to fly, Home set, GPS lost, GPS recover): `Default`, `Off`, or any `.wav` file you copied into `/SOUNDS/en/scripts/GPSHOMER/`. Every `.wav` in that folder shows up in the list, whatever its name. `Off` mutes only that one event.
+  - **Sound** for each event (Ready to fly, Home set, GPS lost, GPS recover): `Default`, `Off`, or any `.wav` file you copied into the sounds folder from the file tree above. Every `.wav` in that folder shows up in the list, whatever its name. `Off` mutes only that one event.
   - **Test**: plays the sound currently selected in that row (and the vibration, if enabled) so you can compare sounds on the spot.
   - **Haptic feedback**: `Off` (default) or `On`. When on, the radio vibrates with every event, independent of the sound, so a muted event still vibrates. GPS lost gives two pulses, every other event one.
   - **Haptic strength**: `Soft`, `Normal` or `Strong` (only shown while haptic feedback is on).
   - **Units**: `Metric` (m, km/h, default) or `Imperial` (ft, mph). Altitude and speed are shown as the radio's sensors deliver them, so this only changes their labels; set the sensor units on the radio to match. The distance to home is computed from the coordinates and is converted to feet.
-  - **Reset to defaults**: restores the factory settings.
+  - **Reset to defaults**: restores the factory settings and clears the flight log.
+- **Last flights**: where the model was when the telemetry ended, for the last three flights. Each entry shows date, time, model name and the coordinates, next to a **QR code**. Scan it with a phone and the map app opens on that spot, which is how you walk up to a model that came down out of sight. The roller steps from the newest flight back to the oldest. The entries are written automatically at the end of every flight, so there is nothing to switch on.
 - **About**: version number and the file locations used by the project.
 
 Press **Save** to store the settings. They are written to `/SCRIPTS/GPSHOMER/config.lua` and picked up by both variants the next time the model is loaded (model switch or reboot). Without this file the built-in defaults are used, so the tool is optional.
 
-Timing values such as the 6 km/h speed threshold or how long the last position is shown are deliberately not in the tool. If you need to change them, they are listed with comments at the top of `core.lua`.
+Timing values such as the minimum ground speed for the arrow or how long the last position is shown are deliberately not in the tool. If you need to change them, they are listed with comments at the top of `core.lua`.
 
 ---
 
 ## 🛠️ Troubleshooting
 
-- **Widget shows "Core missing / Reinstall GPS Homer":** The file `/SCRIPTS/GPSHOMER/core.lua` is missing on the SD card. Copy it again from this repository.
-- **Widget shows "No GPS sensor / Check FC config":** One of the required sensors (`GPS`, `Sats`, `GSpd`, `Hdg`) has never been discovered. Enable GPS telemetry in Betaflight, then run a telemetry discovery on the radio while the GPS has a fix.
-- **Widget stays on "Searching satellites":** Not enough satellites yet, or the fix keeps dropping. Give the GPS a clear view of the sky; home is set once the satellite count stays at or above the threshold for a few seconds.
-- **Widget shows `NO HOME` after arming, no "Home set" was spoken:** You armed before the GPS had enough satellites, so there is no home point for this flight (Betaflight has none either). Land, disarm, wait for "Ready to fly" and arm again.
+- **Widget shows "No GPS sensor / Check FC config":** One of the required sensors (`GPS`, `Sats`, `GSpd`, `Hdg`, `RQly`) has never been discovered. Enable GPS telemetry in Betaflight, then run a telemetry discovery on the radio while the GPS has a fix.
+- **Widget stays on "Searching satellites":** Not enough satellites yet, or the fix keeps dropping. Give the GPS a clear view of the sky, away from buildings and the car.
+- **Widget shows `NO HOME` after arming, no "Home set" was spoken:** You armed before the GPS had enough satellites, so there is no home point for this flight. Land, disarm, wait for "Ready to fly" and arm again.
 - **"Ready to fly" and "Home set" always come together, before arming:** The radio does not know when the model is armed because the `FM` sensor is missing. Run a telemetry discovery to add it; until then home is stored at the first stable fix, and the model must not move before that.
 - **No arrow, only a direction like "SW 220°":** The model is moving slower than 6 km/h, so the GPS cannot tell the flight direction yet. The arrow appears as soon as you fly.
-- **Altitude shows "--":** Neither `Alt` nor `GAlt` is discovered. Altitude is optional; everything else keeps working.
 - **No voice at all:** Check that the `.wav` files really are in `/SOUNDS/en/scripts/GPSHOMER/` (the `en` folder is required even if your radio uses another language). The quickest check is the settings tool: press **Test** on an event.
-- **The function script is not offered in the Special Function list:** The file must be named exactly `gpshom.lua`. EdgeTX hides function scripts with more than 6 characters in their name.
-- **A change to a `.lua` file has no effect on the radio:** Delete the compiled `.luac` file next to it; otherwise EdgeTX keeps running the old version.
-
----
-
-## 💡 Credits
-
-The way the home arrow is read follows the OSD home arrow in [Betaflight](https://betaflight.com), which most FPV pilots already know from their goggles.
+- **A screen reports a missing file:** Copy the folders from this repository again, the file tree above lists everything that belongs on the card.
 
 ---
 
