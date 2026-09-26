@@ -41,12 +41,4 @@ src/RADIO
 # Runtime data
 config.lua
 flights.lua
-# Sibling widgets copied in for side-by-side simulator comparison only
-src/WIDGETS/SNTNL/
-src/SCRIPTS/SNTNL/
-src/WIDGETS/LIPONY/
-src/SCRIPTS/LIPONY/
-src/SCRIPTS/TOOLS/SNTNL.lua
-src/SCRIPTS/TOOLS/LIPONY.lua
-src/SOUNDS/en/scripts/SNTNL/
-src/SOUNDS/en/scripts/LIPONY/
+CHANGELOG.md

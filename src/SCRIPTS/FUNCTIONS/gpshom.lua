@@ -26,9 +26,14 @@ local core    -- the loaded core module
 local state   -- core's caller-owned flight state
 
 -- loadScript does file I/O, so load core once here, not every run.
+-- Same cadence as the widget: run() fires every mixer cycle, the core needs 10 Hz.
+local TICK_INTERVAL        -- getTime units, from core.PARAMS.TICK_MS
+local lastTick             -- nil until the first run
+
 local function init_func()
   core  = assert(loadScript(CORE_PATH))()
   state = core.newState()
+  TICK_INTERVAL = math.max(1, math.floor(core.PARAMS.TICK_MS / 10))
 end
 
 -- pcall: a transient error in core must not halt this script -- it is the only
@@ -38,6 +43,9 @@ local ERROR_LIMIT = 5
 local errorStreak = 0
 
 local function run_func()
+  local now = getTime()
+  if lastTick and now - lastTick < TICK_INTERVAL then return end
+  lastTick = now
   local ok, err = pcall(core.update, state)
   if ok then
     errorStreak = 0

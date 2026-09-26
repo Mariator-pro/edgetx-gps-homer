@@ -43,7 +43,6 @@ M.SENSORS = {
   hdg  = "Hdg",
   alt  = "Alt",    -- altitude; GAlt (GPS altitude) is preferred when discovered
   galt = "GAlt",
-  rqly = "RQly",
   fm   = "FM",     -- flight mode text; carries the armed state (optional)
 }
 
@@ -203,12 +202,33 @@ local function nowMs()
   return getTime() * 10
 end
 
--- getFieldInfo() is nil for a sensor that was never discovered; pcall-guarded
--- because the API may raise on some builds / on the desktop.
+-- getFieldInfo is nil for a sensor that was never discovered; getValue would give 0.
 local function sensorExists(name)
   local ok, info = pcall(getFieldInfo, name)
   return ok and info ~= nil
 end
+
+-- Existence per sensor, re-checked at most every `interval` (same unit as `now`).
+-- names = { key = "SensorName", ... }; returns the cached { key = true/false }.
+local function sensorsPresent(state, names, now, interval)
+  if state.sensorCheckAt == nil or now - state.sensorCheckAt >= interval then
+    state.sensorCheckAt = now
+    local has = {}
+    for key, name in pairs(names) do has[key] = sensorExists(name) end
+    state.sensorsPresent = has
+  end
+  return state.sensorsPresent
+end
+
+-- Value of a present sensor, nil when absent (display shows "--", not a fake 0).
+local function readPresent(has, names, key)
+  if not has[key] then return nil end
+  local ok, v = pcall(getValue, names[key])
+  if ok then return v end
+  return nil
+end
+
+local SENSOR_CHECK_MS = 1000   -- sensor existence is model config, 1 s cache is plenty
 
 -- getValue() returns 0 for undiscovered sensors, indistinguishable from a real
 -- zero; pcall-guarded so a broken API call never crashes the widget.
@@ -216,6 +236,22 @@ local function safeGet(name)
   local ok, v = pcall(getValue, name)
   if ok then return v end
   return nil
+end
+
+-- True while EdgeTX receives telemetry (any protocol).
+local function linkUp()
+  return getRSSI() ~= 0
+end
+
+-- Debounced loss: true once the link has been down for `grace` (same unit as `now`).
+-- state.linkLostSince is nil while the link is up.
+local function linkLost(state, up, now, grace)
+  if up then
+    state.linkLostSince = nil
+    return false
+  end
+  state.linkLostSince = state.linkLostSince or now
+  return now - state.linkLostSince >= grace
 end
 
 -- ---------------------------------------------------------------------------
@@ -477,9 +513,9 @@ end
 -- Telemetry I/O -- the single place that reads all sensors raw.
 -- ---------------------------------------------------------------------------
 
--- The sensors the script cannot work without (GPS frame + link quality).
+-- The sensors the script cannot work without (the GPS frame).
 -- Alt is display-only, so it is not mandatory.
-local REQUIRED = { "gps", "sats", "gspd", "hdg", "rqly" }
+local REQUIRED = { "gps", "sats", "gspd", "hdg" }
 
 -- Armed state from Betaflight's CRSF flight-mode text (>= 4.0): while disarmed
 -- the string ends in "*" (ready), "!" (arming blocked) or "?" (rescue n/a);
@@ -496,8 +532,9 @@ end
 -- Read + validate every sensor. Invalid samples become nil so evaluate() keeps
 -- the last valid value. sensorMissing distinguishes "sensor never discovered"
 -- (no GPS telemetry configured) from "0 satellites" / a momentary bad value.
-function M.readSnapshot()
+function M.readSnapshot(state, now)
   local S       = M.SENSORS
+  local has     = sensorsPresent(state, S, now, SENSOR_CHECK_MS)
   local rawGps  = safeGet(S.gps)
   local gps     = M.validGps(rawGps) and { lat = rawGps.lat, lon = rawGps.lon } or nil
   local sats    = M.validRange(safeGet(S.sats), 0, 99)
@@ -505,19 +542,18 @@ function M.readSnapshot()
   local hdg     = M.validRange(safeGet(S.hdg),  0, 360)
   -- Altitude: GAlt when the radio discovered it (EdgeTX names the GPS altitude
   -- so on some setups), else Alt; neither -> nil, never a misleading 0.
-  local altName = sensorExists(S.galt) and S.galt or (sensorExists(S.alt) and S.alt) or nil
-  local alt     = altName and M.validRange(safeGet(altName), -500, 10000) or nil
+  local rawAlt  = readPresent(has, S, "galt")
+  if rawAlt == nil then rawAlt = readPresent(has, S, "alt") end
+  local alt     = M.validRange(rawAlt, -500, 10000)
 
-  -- Online detection: link quality from the ELRS link statistics.
-  local telem = (safeGet(S.rqly) or 0) > 0
+  local telem = linkUp()
 
   local sensorMissing = false
   for _, k in ipairs(REQUIRED) do
-    if not sensorExists(S[k]) then sensorMissing = true end
+    if not has[k] then sensorMissing = true end
   end
 
-  local armed, armedKnown = false, false
-  if sensorExists(S.fm) then armed, armedKnown = M.armedFromFM(safeGet(S.fm)) end
+  local armed, armedKnown = M.armedFromFM(readPresent(has, S, "fm"))
 
   return {
     telem         = telem,
@@ -601,10 +637,10 @@ function M.evaluate(state, snap, now)
   if snap.alt  then state.lastAlt  = snap.alt  end
 
   -- ---- telemetry offline ----
+  local lost = linkLost(state, snap.telem, now, P.LINK_LOSS_T * 1000)
   if not snap.telem then
     if state.status == "ACTIVE" then
-      if not state.linkLostSince then state.linkLostSince = now end
-      if now - state.linkLostSince >= P.LINK_LOSS_T * 1000 then
+      if lost then
         state.status  = "ENDED"        -- freeze position, stay silent (FR-13)
         state.endedAt = now
         if state.lastLat and state.lastLon then
@@ -612,8 +648,7 @@ function M.evaluate(state, snap, now)
         end
       end
     elseif state.status == "ACQUIRING" or state.status == "READY" then
-      if not state.linkLostSince then state.linkLostSince = now end
-      if now - state.linkLostSince >= P.LINK_LOSS_T * 1000 then
+      if lost then
         M.resetFlight(state)           -- nothing to show -> straight to NO_TELEM
         state.status = "NO_TELEM"
       end
@@ -630,7 +665,6 @@ function M.evaluate(state, snap, now)
   end
 
   -- ---- telemetry online ----
-  state.linkLostSince = nil
 
   -- A return of telemetry from a terminal/idle state is a NEW flight (FR-12).
   if state.status == "ENDED" or state.status == "NO_TELEM" then
@@ -810,7 +844,7 @@ end
 
 function M.update(state, now)
   now = now or nowMs()
-  local snap   = M.readSnapshot()
+  local snap   = M.readSnapshot(state, now)
   local result = M.evaluate(state, snap, now)
   result.snapshot = snap
 

@@ -69,7 +69,7 @@ Everything happens automatically:
 - A **Betaflight flight controller with a GPS module**, with GPS telemetry enabled.
 - An **ExpressLRS receiver (3.0 or newer)** with telemetry enabled.
 - The GPS data must be known to the radio as telemetry sensors. They appear on their own when you run a **telemetry discovery** (Model Settings → Telemetry → "Discover new sensors") while the GPS has a fix:
-  - **Required:** `GPS` (position), `Sats` (satellite count), `GSpd` (ground speed), `Hdg` (course over ground), `RQly` (link quality, detects a lost link)
+  - **Required:** `GPS` (position), `Sats` (satellite count), `GSpd` (ground speed), `Hdg` (course over ground). A lost link is detected by the radio itself, no sensor needed.
   - **Optional:**
     - `FM` (flight mode): sets home at arming; without it, home is set at the first stable fix
     - `Alt` or `GAlt`: altitude, display only
@@ -179,7 +179,7 @@ For radios without a color display, or if you only want the voice announcements:
 
 ### 3. Try it out
 
-- Power the model, wait for the GPS fix and check on the radio's telemetry page that `GPS`, `Sats`, `GSpd`, `Hdg` and `RQly` show values.
+- Power the model, wait for the GPS fix and check on the radio's telemetry page that `GPS`, `Sats`, `GSpd` and `Hdg` show values.
 - On the ground the widget shows `Searching satellites` with the satellite count and the number needed (for example `4 Sats (min 6)`). Once enough satellites are locked (6 by default) for a few seconds, the radio says "Ready to fly" and the widget switches to the live view with `READY TO FLY` under the compass ring; the home arrow and the distance are still missing.
 - Arm the model: the radio says "Home set", and the arrow, the `H` on the ring (NorthUp) and the distance appear.
 - Fly away from the launch position: the distance grows, and once you are flying the arrow appears and points back to the launch position.
@@ -211,7 +211,7 @@ Timing values such as the minimum ground speed for the arrow or how long the las
 
 ## 🛠️ Troubleshooting
 
-- **Widget shows "No GPS sensor / Check FC config":** One of the required sensors (`GPS`, `Sats`, `GSpd`, `Hdg`, `RQly`) has never been discovered. Enable GPS telemetry in Betaflight, then run a telemetry discovery on the radio while the GPS has a fix.
+- **Widget shows "No GPS sensor / Check FC config":** One of the required sensors (`GPS`, `Sats`, `GSpd`, `Hdg`) has never been discovered. Enable GPS telemetry in Betaflight, then run a telemetry discovery on the radio while the GPS has a fix.
 - **Widget stays on "Searching satellites":** Not enough satellites yet, or the fix keeps dropping. Give the GPS a clear view of the sky, away from buildings and the car.
 - **Widget shows `NO HOME` after arming, no "Home set" was spoken:** You armed before the GPS had enough satellites, so there is no home point for this flight. Land, disarm, wait for "Ready to fly" and arm again.
 - **"Ready to fly" and "Home set" always come together, before arming:** The radio does not know when the model is armed because the `FM` sensor is missing. Run a telemetry discovery to add it; until then home is stored at the first stable fix, and the model must not move before that.
