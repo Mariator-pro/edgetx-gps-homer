@@ -295,7 +295,7 @@ local ST_LBL, ST_VAL, ST_TEST = COL1, math.floor(LCD_W * 0.40), math.floor(LCD_W
 local function drawHeader(title)
   local h = LINE + PAD
   lcd.drawFilledRectangle(0, 0, LCD_W, h, COLOR_THEME_SECONDARY1)
-  local _, th = lcd.sizeText("Mg")
+  local _, th = lcd.sizeText("Mg", BOLD)
   lcd.drawText(PAD, math.floor((h - th) / 2), title, COLOR_THEME_PRIMARY2 + BOLD)
 end
 
@@ -519,8 +519,8 @@ local function openPicker(title, labels, sel, onPick)
 end
 
 local function pickerRows()
-  local _, th  = lcd.sizeText("Mg")
-  local maxFit = math.floor((LCD_H - 2 * LINE - th - 2 * PAD) / LINE)
+  local _, hh  = lcd.sizeText("Mg", BOLD)     -- bold header
+  local maxFit = math.floor((LCD_H - 2 * LINE - hh - 2 * PAD) / LINE)
   return math.max(1, math.min(PICKER_MAX_ROWS, #S.picker.labels, maxFit))
 end
 
@@ -539,7 +539,8 @@ local function drawPicker()
   local n     = #p.labels
   local rows  = pickerRows()
   local _, th = lcd.sizeText("Mg")
-  local headH = th + 6
+  local _, hh = lcd.sizeText("Mg", BOLD)      -- the title is bold
+  local headH = hh + 6
   local w     = math.floor(LCD_W * 0.58)
   local h     = headH + rows * LINE + 4
   local x     = math.floor((LCD_W - w) / 2)
