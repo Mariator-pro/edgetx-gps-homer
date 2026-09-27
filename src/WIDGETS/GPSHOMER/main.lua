@@ -718,6 +718,12 @@ local function drawRingStatus(x0, top, W, boxH, d, rCap, small, txt, short, col,
   dtext(x0 + math.floor((W - textW(txt, SMLSIZE)) / 2), top + boxH - smlH, txt, col, SMLSIZE)
 end
 
+-- FC status that replaces the "HOME <rel>" line: long text, short form, colour.
+local ALERTS = {
+  RTH = { "RETURN TO HOME", "RTH", WARN_COL },
+  FS  = { "FAILSAFE",       "FS",  CRIT_COL },
+}
+
 local function drawDirection(x0, top, W, boxH, d, rCap, small)
   local cx = x0 + math.floor(W / 2)
   local cy = top + math.floor(boxH / 2)
@@ -729,16 +735,23 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
     end
     return
   end
+  local alert = ALERTS[d.alert]
   if d.atHome then
-    drawRingStatus(x0, top, W, boxH, d, rCap, small, "AT HOME", "AT HOME", COLORS.muted, true)
+    local s = alert or { "AT HOME", "AT HOME", COLORS.muted }
+    drawRingStatus(x0, top, W, boxH, d, rCap, small, s[1], s[2], s[3], true)
     return
   end
   do
     -- Label under / beside the ring: the steering hint ("30 R") with a valid
     -- course, else the absolute bearing to home ("SW 220\194\176"). `ref` is the
     -- widest value of each kind, so the slot never shifts with the number.
+    -- An FC alert (rescue / failsafe) takes the slot, without the HOME caption.
     local lbl, ref
-    if d.courseValid and d.rel then
+    local cap, lblCol = "HOME", COLORS.fg
+    if alert then
+      lbl = (not small and textW(alert[1], SMLSIZE) <= W) and alert[1] or alert[2]
+      ref, cap, lblCol = lbl, nil, alert[3]
+    elseif d.courseValid and d.rel then
       lbl, ref = relLabel(d.rel), "180 R"
     else
       lbl = string.format("%s %d\194\176", d.sector or "?", math.floor((d.bearingToHome or 0) + 0.5))
@@ -754,12 +767,15 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
       drawCompassArrow(cx, rcy, R, d, compact)
       if lbl ~= "" then
         -- "HOME  30 R": caption muted, value fg, the pair centred under the ring.
-        local cap = "HOME"
-        local cw, vw = textW(cap, SMLSIZE), textW(lbl, SMLSIZE)
-        local lx  = x0 + math.floor((W - (cw + LABEL_GAP + vw)) / 2)
-        local ly  = top + areaH + sx(2)
-        dtext(lx, ly, cap, COLORS.muted, SMLSIZE)
-        dtext(lx + cw + LABEL_GAP, ly, lbl, COLORS.fg, SMLSIZE)
+        local ly = top + areaH + sx(2)
+        if cap then
+          local cw, vw = textW(cap, SMLSIZE), textW(lbl, SMLSIZE)
+          local lx  = x0 + math.floor((W - (cw + LABEL_GAP + vw)) / 2)
+          dtext(lx, ly, cap, COLORS.muted, SMLSIZE)
+          dtext(lx + cw + LABEL_GAP, ly, lbl, COLORS.fg, SMLSIZE)
+        else
+          dtext(x0 + math.floor((W - textW(lbl, SMLSIZE)) / 2), ly, lbl, lblCol, SMLSIZE)
+        end
       end
       return
     end
@@ -773,7 +789,9 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
       local avail, refW = W - 2 * r - GAP, textW(ref, SMLSIZE)
       local lw = 0
       if lbl ~= "" and refW <= avail then
-        if 2 * smlH + sx(1) <= 2 * r then
+        if not cap then
+          lw = refW
+        elseif 2 * smlH + sx(1) <= 2 * r then
           lw = math.max(textW("HOME", SMLSIZE), refW)
         elseif textW("HOME", SMLSIZE) + LABEL_GAP + refW <= avail then
           lw = textW("HOME", SMLSIZE) + LABEL_GAP + refW
@@ -788,12 +806,14 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
       -- Label below the arrow (list layout); the arrow gives up the label height.
       r  = math.min(r, math.floor((boxH - smlH - sx(2)) / 2))
       cy = top + math.floor((boxH - smlH - sx(2)) / 2)
-      dtext(x0 + math.floor((W - textW(lbl, SMLSIZE)) / 2), top + boxH - smlH, lbl, COLORS.fg, SMLSIZE)
+      dtext(x0 + math.floor((W - textW(lbl, SMLSIZE)) / 2), top + boxH - smlH, lbl, lblCol, SMLSIZE)
     elseif lbl ~= "" and textW(ref, SMLSIZE) <= side then
       -- Beside the arrow: muted "HOME" caption over the value when two lines
       -- fit the arrow height, else on one line, else the value alone.
       local lx, cw = cx + r + GAP, textW("HOME", SMLSIZE) + LABEL_GAP
-      if 2 * smlH + sx(1) <= 2 * r then
+      if not cap then
+        dtext(lx, cy - math.floor(smlH / 2), lbl, lblCol, SMLSIZE)
+      elseif 2 * smlH + sx(1) <= 2 * r then
         dtext(lx, cy - smlH - math.floor(sx(1) / 2), "HOME", COLORS.muted, SMLSIZE)
         dtext(lx, cy + math.ceil(sx(1) / 2), lbl, COLORS.fg, SMLSIZE)
       elseif cw + textW(ref, SMLSIZE) <= side then
@@ -958,6 +978,7 @@ local function drawTile(ctx, z, x0, y0, W, H)
       status = st, rel = ctx.smooth.rel, bearingToHome = r.bearingToHome, sector = r.sector,
       courseValid = r.courseValid, course = ctx.smooth.course, distanceM = r.distanceM, sats = r.sats,
       alt = r.alt, gspd = r.gspd, fixLost = r.fixLost, noHome = r.noHome, atHome = r.atHome,
+      alert = r.alert,
     }
     drawActive(W, H, x0, y0, d)
     drawHeartbeat(ctx, z)

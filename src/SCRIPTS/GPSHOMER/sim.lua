@@ -5,8 +5,9 @@
 --
 -- The Companion simulator cannot feed GPS/GSpd/Hdg, so with core.SIMULATE =
 -- true this replaces core.readSnapshot: every telemetry value the core
--- consumes (link, position, sats, speed, course, altitude, sensor presence)
--- comes from the script below. With SIMULATE = false the file is never loaded.
+-- consumes (link, position, sats, speed, course, altitude, flight mode, sensor
+-- presence) comes from the script below. With SIMULATE = false the file is
+-- never loaded.
 --
 -- Timeline (seconds after load):
 --   0-6    sats climb 3 -> 9 on the ground   -> ACQUIRING
@@ -22,6 +23,8 @@
 --          -> below COURSE_MIN_SPD: absolute bearing instead of the arrow
 --   74-114 full circle (heading +9 deg/s) at 40 km/h
 --   114-144 fly straight back towards home at 50 km/h
+--          114-126 flight mode "RTH"  -> RETURN TO HOME under the ring
+--          126-132 flight mode "!FS!" -> FAILSAFE under the ring
 --   144-154 hover at home, speed 0           -> AT HOME again
 --   154-160 sats drop to 2                   -> fix lost (announced after 3 s)
 --   160-166 sats back to 9                   -> fix recovered
@@ -51,7 +54,7 @@ return function(core)
       lat, lon, lastT = HOME_LAT, HOME_LON, nil
     end
 
-    local telem, sats, gspd, hdg, alt = true, 9, 0, 0, 0
+    local telem, sats, gspd, hdg, alt, fm = true, 9, 0, 0, 0, nil
     local armed = t >= 10
     if t < 6 then
       sats = math.min(9, 3 + math.floor(t))
@@ -69,6 +72,7 @@ return function(core)
       gspd, alt = 50, 80 - (t - 114) * 2
       hdg = core.bearingTo(lat, lon, HOME_LAT, HOME_LON)
       if core.haversine(lat, lon, HOME_LAT, HOME_LON) < 8 then gspd = 0 end   -- inside HOME_NEAR_M -> AT HOME
+      if t < 126 then fm = "RTH" elseif t < 132 then fm = "!FS!" end
     elseif t < 154 then
       gspd, alt = 0, 20
     elseif t < 160 then
@@ -89,6 +93,7 @@ return function(core)
       alt           = telem and alt  or nil,
       armed         = armed,
       armedKnown    = true,
+      alert         = core.alertFromFM(fm),
       sensorMissing = false,
     }
   end

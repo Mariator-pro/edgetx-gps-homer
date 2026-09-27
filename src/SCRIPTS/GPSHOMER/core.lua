@@ -532,6 +532,14 @@ function M.armedFromFM(v)
   return not (last == "*" or last == "!" or last == "?"), true
 end
 
+-- Rescue / failsafe from the same text: "RTH" = GPS rescue flying (armed, no
+-- marker; "RTH*" is only the switch on the ground), "!FS!" = failsafe (rescue
+-- or landing, the text does not tell which). Returns "RTH", "FS" or nil.
+function M.alertFromFM(v)
+  if v == "RTH" then return "RTH" end
+  if v == "!FS!" then return "FS" end
+end
+
 -- Read + validate every sensor. Invalid samples become nil so evaluate() keeps
 -- the last valid value. sensorMissing distinguishes "sensor never discovered"
 -- (no GPS telemetry configured) from "0 satellites" / a momentary bad value.
@@ -556,7 +564,8 @@ function M.readSnapshot(state, now)
     if not has[k] then sensorMissing = true end
   end
 
-  local armed, armedKnown = M.armedFromFM(readPresent(has, S, "fm"))
+  local fm = readPresent(has, S, "fm")
+  local armed, armedKnown = M.armedFromFM(fm)
 
   return {
     telem         = telem,
@@ -567,6 +576,7 @@ function M.readSnapshot(state, now)
     alt           = alt,
     armed         = armed,
     armedKnown    = armedKnown,
+    alert         = M.alertFromFM(fm),
     sensorMissing = sensorMissing,
   }
 end
@@ -813,6 +823,7 @@ function M.evaluate(state, snap, now)
   result.lastLat           = lat
   result.lastLon           = lon
   result.fixLost           = state.fixLost   -- persistent flag: widget colours sats red
+  result.alert             = snap.alert      -- "RTH" / "FS" from the FC, nil otherwise
   result.sensorMissing = snap.sensorMissing
   return result
 end
