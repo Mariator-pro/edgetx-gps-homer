@@ -155,7 +155,7 @@ Two more files show up in `/SCRIPTS/GPSHOMER/` later, written by the radio itsel
 3. *(Optional)* Open the widget settings to adjust the look:
    - **Theme**: `Dark` or `Light`.
    - **Compass**: `NoseUp` (default): flight direction on top, the arrow points home. `NorthUp`: north on top like a map, an `H` on the ring marks home.
-   - **Transparency**: how milky the background overlay is (light theme only).
+   - **Transparency**: how much of the radio theme shows through the milky background (light theme only): `0%` opaque, `100%` no overlay.
    - **Accent**: color of the heading text: `Default` (green), `Theme` (the focus color of your EdgeTX theme) or `Custom` (pick any color under **AccentColor**).
 
 > 📐 **Which screen layout?** EdgeTX names its layouts `columns × rows`, so `2×4` means 2 zones side by side and 4 on top of each other. The widget is designed for a **half-width** zone and looks best in the layouts with **2 columns**:

@@ -115,12 +115,23 @@ local function fontH(flags)
   if not h then h = select(2, lcd.sizeText("0", flags)); FONT_H[flags] = h end
   return h
 end
+-- Width cache is capped: every new live value (distance, voltage ...) adds an
+-- entry, so it starts over once TEXT_W_MAX entries are stored.
+local TEXT_W_MAX = 200
+local textWCount = 0
 local function textW(text, flags)
   flags = flags or 0
   local byFlag = TEXT_W[flags]
   if not byFlag then byFlag = {}; TEXT_W[flags] = byFlag end
   local w = byFlag[text]
-  if not w then w = lcd.sizeText(text, flags); byFlag[text] = w end
+  if not w then
+    if textWCount >= TEXT_W_MAX then
+      TEXT_W, textWCount = {}, 0
+      byFlag = {}; TEXT_W[flags] = byFlag
+    end
+    w = lcd.sizeText(text, flags); byFlag[text] = w
+    textWCount = textWCount + 1
+  end
   return w
 end
 
@@ -1012,14 +1023,16 @@ local function refresh(ctx, event, touchState)
   BRAND    = brandColor(ctx.options.Accent, ctx.options.AccentColor)
   NORTH_UP = (ctx.options.Compass == 2)
 
-  -- Background per theme (Designguide 3): Dark paints its own panel; Light stays
-  -- transparent with an optional milky overlay.
+  -- Background per theme (Designguide 3): Dark paints its own panel; Light gets a
+  -- milky overlay. Transparency choice 1..6 = 0..100 % see-through -> opacity
+  -- 0..15 (15 = invisible); anything else (e.g. a pre-choice value) = default.
   if not COLORS.transparent then
     lcd.drawFilledRectangle(0, 0, z.w, z.h, COLORS.panel)
   else
-    local trans = ctx.options.Transparency or 0
-    if trans > 0 then
-      lcd.drawFilledRectangle(0, 0, z.w, z.h, COLOR_THEME_PRIMARY2, 3 * trans)
+    local trans = ctx.options.Transparency
+    if type(trans) ~= "number" or trans < 1 or trans > 6 then trans = 3 end
+    if trans < 6 then
+      lcd.drawFilledRectangle(0, 0, z.w, z.h, COLOR_THEME_PRIMARY2, 3 * (trans - 1))
     end
   end
 
@@ -1038,7 +1051,7 @@ return {
   options = {
     { "Theme",        CHOICE, 1, { "Dark", "Light" } },
     { "Compass",      CHOICE, 1, { "NoseUp", "NorthUp" } },
-    { "Transparency", VALUE,  2, 0, 5 },
+    { "Transparency", CHOICE, 3, { "0%", "20%", "40%", "60%", "80%", "100%" } },
     { "Accent",       CHOICE, 1, { "Default", "Theme", "Custom" } },
     { "AccentColor",  COLOR,  lcd.RGB(124, 210, 48) },
   },
