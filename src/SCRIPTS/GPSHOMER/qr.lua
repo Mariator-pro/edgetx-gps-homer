@@ -7,7 +7,7 @@
 -- block, fixed data mask 2. That holds 53 bytes, enough for a map URL with
 -- six decimals. Loaded on demand by the tool; the widget never needs it.
 --
--- EdgeTX-Lua has no bitwise operators, so XOR runs off a nibble table.
+-- XOR runs off a nibble table (plain arithmetic, no bitwise operators needed).
 -- A full encode is a few thousand operations in one call -- fine for a tool
 -- screen built once, too slow to repeat per frame (the caller caches it).
 -- =====================================================================

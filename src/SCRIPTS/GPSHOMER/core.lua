@@ -386,8 +386,10 @@ end
 -- critical; the tool reports and repairs a broken file on the ground).
 -- loadScript is the documented EdgeTX loader (nil when missing/broken) and does
 -- not exist on desktop, so unit tests are unaffected.
+-- Text only, no .luac (mode "tx"): the radio would prefer a compiled copy with the
+-- same 2 s FAT timestamp over a newer file.
 local function loadConfigOnce()
-  local chunk = loadScript and loadScript(M.CONFIG_PATH)
+  local chunk = loadScript and loadScript(M.CONFIG_PATH, "tx")
   if not chunk then return end
   local ok, result = pcall(chunk)
   if not ok or type(result) ~= "table" then return end
@@ -431,9 +433,10 @@ function M.writeFile(path, content)
 end
 
 -- Logged flights, newest first. A missing, unparsable or foreign-schema file
--- reads as an empty log: it is a convenience, never flight critical.
+-- reads as an empty log: it is a convenience, never flight critical. Loaded as
+-- text only like the config (see loadConfigOnce).
 function M.readFlights()
-  local chunk = loadScript and loadScript(M.FLIGHTS_PATH)
+  local chunk = loadScript and loadScript(M.FLIGHTS_PATH, "tx")
   if not chunk then return {} end
   local ok, result = pcall(chunk)
   if not ok or type(result) ~= "table" then return {} end
