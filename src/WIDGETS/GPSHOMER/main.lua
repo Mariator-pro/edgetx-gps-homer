@@ -933,7 +933,7 @@ local function drawTile(ctx, z, x0, y0, W, H)
     drawStatusTile(z, "Core missing", "Reinstall GPS Homer", true); return
   end
   if ctx.fatalError then
-    drawStatusTile(z, "Widget error", "Re-add or restart", true); return
+    drawStatusTile(z, "Widget error", "Restart radio", true); return
   end
 
   local r = ctx.result

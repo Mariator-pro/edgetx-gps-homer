@@ -46,7 +46,7 @@ M.SENSORS = {
   fm   = "FM",     -- flight mode text; carries the armed state (optional)
 }
 
--- Event sounds. Folder fixed (case-sensitive FAT: folder upper, files lower);
+-- Event sounds. Folder fixed (folder upper, files lower, as in the repo);
 -- per event the config may hold a file name or `false` (that event muted).
 -- Absolute path bypasses EdgeTX's per-language resolution so the pilot's own
 -- voice plays regardless of locale.
@@ -55,7 +55,7 @@ M.VERSION   = "1.0.0"
 -- Simulator switch: true replaces all telemetry reads with the scripted flight
 -- in sim.lua (Companion cannot feed GPS/GSpd/Hdg). Must be false for flying.
 M.SIMULATE  = false
-M.SOUND_DIR = "/SOUNDS/en/scripts/GPSHOMER/"
+M.SOUND_DIR = "/SOUNDS/en/SCRIPTS/GPSHOMER/"
 M.SOUNDS = {
   ready = "gpsready.wav", -- "ready to fly" (stable fix, home not set yet)
   fix  = "gpsfix.wav",   -- "home set"

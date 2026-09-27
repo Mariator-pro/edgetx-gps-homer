@@ -136,7 +136,7 @@ WIDGETS/
     └── main.lua            ← widget variant
 SOUNDS/
 └── en/
-    └── scripts/
+    └── SCRIPTS/
         └── GPSHOMER/
             ├── gpsready.wav        ← "Ready to fly"
             ├── gpsfix.wav          ← "Home set"
@@ -144,7 +144,7 @@ SOUNDS/
             └── gpsrec.wav          ← "GPS recovered"
 ```
 
-All files sit in the same folders in this repository. The sound files always live under `/SOUNDS/en/scripts/GPSHOMER/`, no matter which language your radio is set to.
+All files sit in the same folders in this repository. The sound files always live under `/SOUNDS/en/SCRIPTS/GPSHOMER/`, no matter which language your radio is set to.
 
 Two more files show up in `/SCRIPTS/GPSHOMER/` later, written by the radio itself and nothing you copy: `config.lua` holds your settings once you save them in the tool, and `flights.lua` holds the last three landing positions.
 
@@ -216,7 +216,7 @@ Timing values such as the minimum ground speed for the arrow or how long the las
 - **Widget shows `NO HOME` after arming, no "Home set" was spoken:** You armed before the GPS had enough satellites, so there is no home point for this flight. Land, disarm, wait for "Ready to fly" and arm again.
 - **"Ready to fly" and "Home set" always come together, before arming:** The radio does not know when the model is armed because the `FM` sensor is missing. Run a telemetry discovery to add it; until then home is stored at the first stable fix, and the model must not move before that.
 - **No arrow, only a direction like "SW 220°":** The model is moving slower than 6 km/h, so the GPS cannot tell the flight direction yet. The arrow appears as soon as you fly.
-- **No voice at all:** Check that the `.wav` files really are in `/SOUNDS/en/scripts/GPSHOMER/` (the `en` folder is required even if your radio uses another language). The quickest check is the settings tool: press **Test** on an event.
+- **No voice at all:** Check that the `.wav` files really are in `/SOUNDS/en/SCRIPTS/GPSHOMER/` (the `en` folder is required even if your radio uses another language). The quickest check is the settings tool: press **Test** on an event.
 - **A screen reports a missing file:** Copy the folders from this repository again, the file tree above lists everything that belongs on the card.
 
 ---
