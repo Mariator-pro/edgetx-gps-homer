@@ -338,15 +338,19 @@ local function drawSplashTile(z, base, third)
   end
 end
 
--- Blinking red dot top-right while the telemetry link is up (1 s on / 1 s off);
--- stops the instant the link drops. Shown in ACTIVE and ACQUIRING.
-local HEARTBEAT_R    = sx(3)
-local HEARTBEAT_HALF = 100   -- getTime ticks per half period
-local function drawHeartbeat(ctx, z)
-  local snap = ctx.result and ctx.result.snapshot
-  if not (snap and snap.telem) then return end
-  if math.floor(getTime() / HEARTBEAT_HALF) % 2 ~= 0 then return end
-  lcd.drawFilledCircle(z.w - sx(4) - HEARTBEAT_R, sx(4) + HEARTBEAT_R, HEARTBEAT_R, CRIT_COL)
+-- Pulsing red dot, top-right (fades in and out every 2 s); the caller draws it only
+-- while telemetry is arriving. drawFilledCircle has no opacity, so the colour is
+-- blended by hand between the background and red (light theme: white, the real
+-- background there depends on the radio theme).
+local HEARTBEAT_PERIOD = 200   -- getTime ticks
+local HEARTBEAT_RED    = { 220, 40, 40 }
+local HEARTBEAT_BG     = { dark = { 18, 20, 18 }, light = { 255, 255, 255 } }
+local function drawHeartbeat(ctx)
+  local t  = 0.5 - 0.5 * math.cos(2 * math.pi * (getTime() % HEARTBEAT_PERIOD) / HEARTBEAT_PERIOD)
+  local bg = COLORS.transparent and HEARTBEAT_BG.light or HEARTBEAT_BG.dark
+  local function mix(i) return math.floor(bg[i] + (HEARTBEAT_RED[i] - bg[i]) * t + 0.5) end
+  local r = sx(3)
+  lcd.drawFilledCircle(ctx.zone.w - sx(4) - r, sx(4) + r, r, lcd.RGB(mix(1), mix(2), mix(3)))
 end
 
 -- ---------------------------------------------------------------------------
@@ -967,7 +971,8 @@ local function drawTile(ctx, z, x0, y0, W, H)
     drawStatusTile(z, "No GPS sensor", "Check FC config", true); return
   end
 
-  local st = r.status
+  local st     = r.status
+  local linkUp = r.snapshot and r.snapshot.telem   -- heartbeat only while packets arrive
   if st == "ACTIVE" or st == "READY" then
     -- READY = the same live view before home is set: no arrow/H, DIST "--",
     -- a status line instead of "HOME <rel>".
@@ -981,12 +986,12 @@ local function drawTile(ctx, z, x0, y0, W, H)
       alert = r.alert,
     }
     drawActive(W, H, x0, y0, d)
-    drawHeartbeat(ctx, z)
+    if linkUp then drawHeartbeat(ctx) end
   elseif st == "ACQUIRING" then
     -- "4 Sats (min 6)": found so far, and the count home needs.
     drawSplashTile(z, "Searching satellites",
                    string.format("%d Sats (min %d)", r.sats or 0, core.PARAMS.HOME_MIN_SATS))
-    drawHeartbeat(ctx, z)
+    if linkUp then drawHeartbeat(ctx) end
   elseif st == "ENDED" then
     if r.lastLat and r.lastLon then
       drawStatusTile(z, "Flight ended", dms(r.lastLat, "N", "S"), false, dms(r.lastLon, "E", "W"))
