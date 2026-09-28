@@ -1,6 +1,6 @@
 # Compatibility
 
-This page shows which GPS Homer features work with which flight controller firmware. The GPS data has to reach the radio over ExpressLRS (CRSF telemetry).
+This page shows which GPS Homer features work with which flight controller firmware and which RC link. Each table looks at one side of the chain and assumes the other side delivers its data.
 
 ## Flight controller firmware
 
@@ -14,11 +14,28 @@ This page shows which GPS Homer features work with which flight controller firmw
 | Voice announcements | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ⚙️&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> |
 | Last position (flight log) | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ⚙️&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> |
 
+## RC link
+
+| Feature | ExpressLRS | TBS Crossfire | ImmersionRC Ghost | FrSky ACCESS |
+|---|:-:|:-:|:-:|:-:|
+| Link detection | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
+| Home set on arming | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
+| Direction to home (arrow) | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
+| Distance to home | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
+| RETURN TO HOME / FAILSAFE / LANDING line | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
+| Voice announcements | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
+| Last position (flight log) | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
+
+- **ImmersionRC Ghost:** EdgeTX decodes the GPS course 1000 times too small (reported as [EdgeTX #7841](https://github.com/EdgeTX/edgetx/issues/7841)), so the arrow points the wrong way. Betaflight sends no flight mode over Ghost, so home is set at the first stable fix instead of on arming, and there is no status line. Checked with Betaflight only; INAV and ArduPilot over Ghost were not checked.
+- **FrSky ACCESS:** no flight controller sends the satellite count as its own sensor, so GPS Homer always shows "No GPS sensor".
+
 ## Legend
 
 - ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> Tested on the radio and in the simulator.
 - ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> Checked in the source code (flight controller, ExpressLRS and EdgeTX), not tested on hardware yet.
+- ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> Radio side checked in the source code; the firmware of the RC link itself is closed source, so that part could not be checked.
 - ⚙️ Works only after setup, see below. A badge next to ⚙️ means the same as next to ✅.
+- ❌ Does not work, see the notes under the table. A badge next to ❌ says how far it was checked.
 
 A ✅ means the feature works without extra setup, apart from GPS telemetry being enabled on the flight controller and the sensors being discovered on the radio.
 
@@ -30,6 +47,8 @@ ArduPilot has no failsafe text: a failsafe only switches the flight mode, so the
 
 What has to be set so the features work.
 
+### Flight controller (with ExpressLRS or TBS Crossfire)
+
 | Firmware | Flight controller | Radio |
 |---|---|---|
 | **Betaflight** | GPS enabled and GPS telemetry not disabled. | Nothing to change. |
@@ -37,3 +56,11 @@ What has to be set so the features work.
 | **ArduPilot** | Receiver on a serial port with `SERIALx_PROTOCOL = 23` (RCIN), which RC control over CRSF needs anyway. `RC_OPTIONS` option "CRSF flight mode disarm star" (without it `FM` has no disarmed marker, so home is never set; not needed in MAVLink mode). | Nothing to change. |
 
 If the receiver runs in MAVLink mode instead of CRSF, the ExpressLRS TX module builds the telemetry from ArduPilot's MAVLink messages. Copter then sends no GPS data by default: set the extended status stream rate `MAVn_EXT_STAT` of the MAVLink channel the receiver is on to at least 1 Hz (parameter name as of ArduPilot master, September 2026).
+
+### RC link
+
+| Link | Flight controller | Radio |
+|---|---|---|
+| **ExpressLRS**, **TBS Crossfire** | Nothing extra. | Nothing to change. |
+| **ImmersionRC Ghost** | Nothing extra. Betaflight only sends the GPS frames with GPS enabled and GPS telemetry not disabled. | Nothing to change. |
+| **FrSky ACCESS** | Not supported. | |
