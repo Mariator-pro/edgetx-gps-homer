@@ -52,11 +52,11 @@ The widget shows:
 
 - **A home arrow** that points back to the launch position, seen from your current flight direction. Arrow up: keep going straight. Arrow down: turn around. Arrow left or right: turn that way. A compass ring around the arrow shows where north currently is.
 - **The same hint in words** (`ahead`, `behind`, `30 R`, ...) and the **distance to home** (metres, or feet with imperial units).
-- **The number of satellites** with a signal-style bar (red, yellow, green), plus altitude and ground speed.
+- **The number of satellites** with a signal-style bar (red, yellow, green), plus altitude (above the home point) and ground speed.
 
 Everything happens automatically:
 
-- **Home is set on its own, exactly like in Betaflight.** Once the GPS has a solid fix for a few seconds the radio says "Ready to fly", and the moment you arm, the launch position is stored and the radio says "Home set". That is the same instant Betaflight sets its own home point, so the arrow on the radio and the arrow in the goggles always agree. (On a model that does not send its armed state, home is stored at the first stable fix instead.)
+- **Home is set on its own, exactly like on the flight controller.** Once the GPS has a solid fix for a few seconds the radio says "Ready to fly", and the moment you arm, the launch position is stored and the radio says "Home set". That is the same instant Betaflight and INAV set their own home point, so the arrow on the radio and the arrow in the goggles always agree. With INAV's home reset switch the radio follows the new home as well. (On a model that does not send its armed state, home is stored at the first stable fix instead.)
 - **Voice only when it matters.** The radio speaks on four events (ready to fly, home set, GPS signal lost, GPS signal back). There are no continuous announcements, and each event can be muted or replaced with your own sound file.
 - **Standing still or hovering slowly?** The flight direction comes from the GPS course over ground, which only exists while the model is moving. Below 6 km/h the widget therefore switches to the absolute direction instead.
 - **Lost the link?** If the telemetry connection is gone for good (landed out of range, crash), the widget freezes and keeps showing the **last known GPS position** of the model to help you find it.
@@ -66,7 +66,7 @@ Everything happens automatically:
 ## 🧰 Requirements
 
 - A radio running **EdgeTX 2.11 or newer**. For the widget the radio needs a color display; for voice announcements only, any EdgeTX radio will do (see [Script variants](#-script-variants)).
-- A **Betaflight flight controller with a GPS module**, with GPS telemetry enabled.
+- A **Betaflight or INAV flight controller with a GPS module**, with GPS telemetry enabled. INAV support is derived from the INAV source code and not flight-tested yet.
 - An **ExpressLRS receiver (3.0 or newer)** with telemetry enabled.
 - The GPS data must be known to the radio as telemetry sensors. They appear on their own when you run a **telemetry discovery** (Model Settings → Telemetry → "Discover new sensors") while the GPS has a fix:
   - **Required:** `GPS` (position), `Sats` (satellite count), `GSpd` (ground speed), `Hdg` (course over ground). A lost link is detected by the radio itself, no sensor needed.
@@ -211,7 +211,7 @@ Timing values such as the minimum ground speed for the arrow or how long the las
 
 ## 🛠️ Troubleshooting
 
-- **Widget shows "No GPS sensor / Check FC config":** One of the required sensors (`GPS`, `Sats`, `GSpd`, `Hdg`) has never been discovered. Enable GPS telemetry in Betaflight, then run a telemetry discovery on the radio while the GPS has a fix.
+- **Widget shows "No GPS sensor / Check FC config":** One of the required sensors (`GPS`, `Sats`, `GSpd`, `Hdg`) has never been discovered. Enable GPS telemetry on the flight controller, then run a telemetry discovery on the radio while the GPS has a fix.
 - **Widget stays on "Searching satellites":** Not enough satellites yet, or the fix keeps dropping. Give the GPS a clear view of the sky, away from buildings and the car.
 - **Widget shows `NO HOME` after arming, no "Home set" was spoken:** You armed before the GPS had enough satellites, so there is no home point for this flight. Land, disarm, wait for "Ready to fly" and arm again.
 - **"Ready to fly" and "Home set" always come together, before arming:** The radio does not know when the model is armed because the `FM` sensor is missing. Run a telemetry discovery to add it; until then home is stored at the first stable fix, and the model must not move before that.

@@ -520,24 +520,29 @@ end
 -- Alt is display-only, so it is not mandatory.
 local REQUIRED = { "gps", "sats", "gspd", "hdg" }
 
--- Armed state from Betaflight's CRSF flight-mode text (>= 4.0): while disarmed
--- the string ends in "*" (ready), "!" (arming blocked) or "?" (rescue n/a);
--- armed strings carry no marker. "!FS!" (failsafe) is an armed state despite
--- its trailing "!". Returns armed, known; known = false when the value is not a
--- usable string (sensor absent / other firmware), then the caller falls back.
+-- Armed state from the CRSF flight-mode text. Betaflight (>= 4.0) marks
+-- disarmed with a trailing "*" (ready), "!" (arming blocked) or "?" (rescue
+-- n/a); INAV sends "OK", "WAIT" or "!ERR" instead. Armed strings carry no
+-- marker; "!FS!" (failsafe) is armed despite its trailing "!". Returns armed,
+-- known; known = false when the value is not a usable string (sensor absent),
+-- then the caller falls back.
+local INAV_DISARMED = { OK = true, WAIT = true, ["!ERR"] = true }
 function M.armedFromFM(v)
   if type(v) ~= "string" or #v == 0 then return false, false end
   if v == "!FS!" then return true, true end
+  if INAV_DISARMED[v] then return false, true end
   local last = string.sub(v, -1)
   return not (last == "*" or last == "!" or last == "?"), true
 end
 
--- Rescue / failsafe from the same text: "RTH" = GPS rescue flying (armed, no
--- marker; "RTH*" is only the switch on the ground), "!FS!" = failsafe (rescue
--- or landing, the text does not tell which). Returns "RTH", "FS" or nil.
+-- Rescue / failsafe / autoland from the same text: "RTH" = GPS rescue flying
+-- (armed, no marker; "RTH*" is only the switch on the ground), INAV "WRTH" =
+-- RTH at the end of a mission, "!FS!" = failsafe (rescue or landing, the text
+-- does not tell which), INAV "LAND" = fixed-wing autoland. Returns "RTH", "FS",
+-- "LAND" or nil.
+local ALERTS = { RTH = "RTH", WRTH = "RTH", ["!FS!"] = "FS", LAND = "LAND" }
 function M.alertFromFM(v)
-  if v == "RTH" then return "RTH" end
-  if v == "!FS!" then return "FS" end
+  return ALERTS[v]
 end
 
 -- Read + validate every sensor. Invalid samples become nil so evaluate() keeps
@@ -577,6 +582,7 @@ function M.readSnapshot(state, now)
     armed         = armed,
     armedKnown    = armedKnown,
     alert         = M.alertFromFM(fm),
+    homeReset     = fm == "HRST",   -- INAV: home moved to here by switch
     sensorMissing = sensorMissing,
   }
 end
@@ -603,6 +609,8 @@ function M.resetFlight(state)
   state.homeSet          = false
   state.homeLat          = nil
   state.homeLon          = nil
+  state.homeAlt          = nil   -- altitude at home: ALT is shown relative to it
+  state.lastHomeReset    = false -- last sample was INAV's "HRST" (edge detection)
   state.fixOkSince       = nil   -- fix stabilisation timer (nil = not started)
   state.fixLostSince     = nil   -- fix-loss debounce timer
   state.fixLost          = false
@@ -692,6 +700,10 @@ function M.evaluate(state, snap, now)
             and snap.sats ~= nil
             and snap.sats >= P.HOME_MIN_SATS
 
+  -- INAV home reset: "HRST" comes for a few frames, act on its first one.
+  local homeReset = snap.homeReset and not state.lastHomeReset and fixOk
+  state.lastHomeReset = snap.homeReset or false
+
   -- ---- home not yet set (ACQUIRING / READY) ----
   if not state.homeSet then
     -- Stabilisation must be uninterrupted.
@@ -706,6 +718,7 @@ function M.evaluate(state, snap, now)
       state.homeSet = true
       state.homeLat = snap.gps.lat
       state.homeLon = snap.gps.lon
+      state.homeAlt = state.lastAlt
       if not state.homeAnnounced then
         result.homeSet      = true   -- one-shot event
         state.homeAnnounced = true
@@ -743,7 +756,7 @@ function M.evaluate(state, snap, now)
     if not fixOk then state.readyAnnounced = false end
 
     if known then
-      if armed and state.lastArmed == false and fixOk then setHome() end
+      if (armed and state.lastArmed == false and fixOk) or homeReset then setHome() end
       state.lastArmed = armed
     elseif fixStable and canSetHome then
       setHome()
@@ -767,8 +780,7 @@ function M.evaluate(state, snap, now)
       result.status        = state.status
       result.noHome        = state.ready and not canSetHome   -- armed / locked: no home coming
       result.sats          = snap.sats or state.lastSats
-      result.alt           = state.lastAlt
-      result.gspd          = state.lastGspd
+      result.gspd          = state.lastGspd   -- no ALT without home: nothing to be relative to
       result.fixLost       = not fixOk
       result.courseValid   = M.updateCourseValid(state, state.lastGspd, now)
       if result.courseValid then result.course = state.lastHdg or 0 end
@@ -801,6 +813,13 @@ function M.evaluate(state, snap, now)
     end
   end
 
+  -- INAV home reset in flight: follow the FC, keep the altitude reference
+  -- (INAV keeps its home altitude too) and announce the new home.
+  if homeReset then
+    state.homeLat, state.homeLon = snap.gps.lat, snap.gps.lon
+    result.homeSet = true
+  end
+
   -- Derived display values from the last valid telemetry.
   local lat, lon = state.lastLat, state.lastLon
   if lat and lon and state.homeLat then
@@ -818,7 +837,7 @@ function M.evaluate(state, snap, now)
 
   result.status            = "ACTIVE"
   result.sats              = snap.sats or state.lastSats
-  result.alt               = state.lastAlt
+  result.alt               = state.lastAlt and state.homeAlt and state.lastAlt - state.homeAlt
   result.gspd              = state.lastGspd
   result.lastLat           = lat
   result.lastLon           = lon

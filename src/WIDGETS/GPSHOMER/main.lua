@@ -724,8 +724,9 @@ end
 
 -- FC status that replaces the "HOME <rel>" line: long text, short form, colour.
 local ALERTS = {
-  RTH = { "RETURN TO HOME", "RTH", WARN_COL },
-  FS  = { "FAILSAFE",       "FS",  CRIT_COL },
+  RTH  = { "RETURN TO HOME", "RTH",  WARN_COL },
+  FS   = { "FAILSAFE",       "FS",   CRIT_COL },
+  LAND = { "LANDING",        "LAND", WARN_COL },
 }
 
 local function drawDirection(x0, top, W, boxH, d, rCap, small)
