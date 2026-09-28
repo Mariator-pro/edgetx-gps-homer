@@ -38,6 +38,8 @@ GPS Homer puts a **home arrow on your radio**: a small EdgeTX widget that shows 
 | EdgeTX    | v2.11           | v2.12.4   | Radiomaster TX15, Radiomaster TX16S MK3 |
 | ExpressLRS| v3.0            | v4.1.0    | Radiomaster RP1 V2, RP3 V2, RP4TD |
 
+> Flight controllers (Betaflight, INAV, ArduPilot) and the settings they need: see [`docs/compatibility.md`](docs/compatibility.md).
+
 ---
 
 ## 🎯 What is it for?
@@ -56,7 +58,7 @@ The widget shows:
 
 Everything happens automatically:
 
-- **Home is set on its own, exactly like on the flight controller.** Once the GPS has a solid fix for a few seconds the radio says "Ready to fly", and the moment you arm, the launch position is stored and the radio says "Home set". That is the same instant Betaflight and INAV set their own home point, so the arrow on the radio and the arrow in the goggles always agree. With INAV's home reset switch the radio follows the new home as well. (On a model that does not send its armed state, home is stored at the first stable fix instead.)
+- **Home is set on its own, exactly like on the flight controller.** Once the GPS has a solid fix for a few seconds the radio says "Ready to fly", and the moment you arm, the launch position is stored and the radio says "Home set". That is the same instant the flight controller sets its own home point, so the arrow on the radio and the arrow in the goggles always agree. With INAV's home reset switch the radio follows the new home as well. (On a model that does not send its armed state, home is stored at the first stable fix instead.)
 - **Voice only when it matters.** The radio speaks on four events (ready to fly, home set, GPS signal lost, GPS signal back). There are no continuous announcements, and each event can be muted or replaced with your own sound file.
 - **Standing still or hovering slowly?** The flight direction comes from the GPS course over ground, which only exists while the model is moving. Below 6 km/h the widget therefore switches to the absolute direction instead.
 - **Lost the link?** If the telemetry connection is gone for good (landed out of range, crash), the widget freezes and keeps showing the **last known GPS position** of the model to help you find it.
@@ -66,7 +68,7 @@ Everything happens automatically:
 ## 🧰 Requirements
 
 - A radio running **EdgeTX 2.11 or newer**. For the widget the radio needs a color display; for voice announcements only, any EdgeTX radio will do (see [Script variants](#-script-variants)).
-- A **Betaflight or INAV flight controller with a GPS module**, with GPS telemetry enabled. INAV support is derived from the INAV source code and not flight-tested yet.
+- A **Betaflight, INAV or ArduPilot flight controller with a GPS module**, with GPS telemetry enabled. INAV and ArduPilot support is derived from their source code and not flight-tested yet; ArduPilot needs one extra setting, see [`docs/compatibility.md`](docs/compatibility.md#setup).
 - An **ExpressLRS receiver (3.0 or newer)** with telemetry enabled.
 - The GPS data must be known to the radio as telemetry sensors. They appear on their own when you run a **telemetry discovery** (Model Settings → Telemetry → "Discover new sensors") while the GPS has a fix:
   - **Required:** `GPS` (position), `Sats` (satellite count), `GSpd` (ground speed), `Hdg` (course over ground). A lost link is detected by the radio itself, no sensor needed.

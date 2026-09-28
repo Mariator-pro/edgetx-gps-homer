@@ -535,12 +535,18 @@ function M.armedFromFM(v)
   return not (last == "*" or last == "!" or last == "?"), true
 end
 
--- Rescue / failsafe / autoland from the same text: "RTH" = GPS rescue flying
+-- Rescue / failsafe / landing from the same text: "RTH" = GPS rescue flying
 -- (armed, no marker; "RTH*" is only the switch on the ground), INAV "WRTH" =
--- RTH at the end of a mission, "!FS!" = failsafe (rescue or landing, the text
--- does not tell which), INAV "LAND" = fixed-wing autoland. Returns "RTH", "FS",
--- "LAND" or nil.
-local ALERTS = { RTH = "RTH", WRTH = "RTH", ["!FS!"] = "FS", LAND = "LAND" }
+-- RTH at the end of a mission, ArduPilot "RTL " (trailing space), "SRTL",
+-- "ARTL", "QRTL"; "!FS!" = failsafe (rescue or landing, the text does not tell
+-- which; ArduPilot has no failsafe text); "LAND" = INAV fixed-wing autoland or
+-- ArduPilot Copter Land, ArduPilot Plane "ALND", "QLND", "L2QL". Returns "RTH",
+-- "FS", "LAND" or nil.
+local ALERTS = {
+  RTH = "RTH", WRTH = "RTH", ["RTL "] = "RTH", SRTL = "RTH", ARTL = "RTH", QRTL = "RTH",
+  ["!FS!"] = "FS",
+  LAND = "LAND", ALND = "LAND", QLND = "LAND", L2QL = "LAND",
+}
 function M.alertFromFM(v)
   return ALERTS[v]
 end
@@ -610,6 +616,9 @@ function M.resetFlight(state)
   state.homeLat          = nil
   state.homeLon          = nil
   state.homeAlt          = nil   -- altitude at home: ALT is shown relative to it
+  state.groundLat        = nil   -- last position with a good fix while disarmed
+  state.groundLon        = nil   -- (home at the arm edge, which a slow FM text
+  state.groundAlt        = nil   --  reports late)
   state.lastHomeReset    = false -- last sample was INAV's "HRST" (edge detection)
   state.fixOkSince       = nil   -- fix stabilisation timer (nil = not started)
   state.fixLostSince     = nil   -- fix-loss debounce timer
@@ -714,11 +723,13 @@ function M.evaluate(state, snap, now)
     end
     local fixStable = fixOk and (now - state.fixOkSince) >= P.HOME_STABLE_T * 1000
 
-    local function setHome()
+    local function setHome(lat, lon, alt)
       state.homeSet = true
-      state.homeLat = snap.gps.lat
-      state.homeLon = snap.gps.lon
-      state.homeAlt = state.lastAlt
+      if lat then
+        state.homeLat, state.homeLon, state.homeAlt = lat, lon, alt
+      else
+        state.homeLat, state.homeLon, state.homeAlt = snap.gps.lat, snap.gps.lon, state.lastAlt
+      end
       if not state.homeAnnounced then
         result.homeSet      = true   -- one-shot event
         state.homeAnnounced = true
@@ -756,7 +767,20 @@ function M.evaluate(state, snap, now)
     if not fixOk then state.readyAnnounced = false end
 
     if known then
-      if (armed and state.lastArmed == false and fixOk) or homeReset then setHome() end
+      if armed and state.lastArmed == false and fixOk then
+        -- The FM text can arrive up to 2 s late (ArduPilot), when the model
+        -- may already fly: use the last position seen on the ground.
+        setHome(state.groundLat, state.groundLon, state.groundAlt)
+      elseif homeReset then
+        setHome()
+      end
+      if not armed then
+        if fixOk then
+          state.groundLat, state.groundLon, state.groundAlt = snap.gps.lat, snap.gps.lon, state.lastAlt
+        else
+          state.groundLat, state.groundLon, state.groundAlt = nil, nil, nil
+        end
+      end
       state.lastArmed = armed
     elseif fixStable and canSetHome then
       setHome()
