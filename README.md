@@ -54,16 +54,17 @@ Which way is home? A model with GPS knows the answer at any moment, but the radi
 
 The widget shows:
 
-- **A home arrow** that points back to the launch position, seen from your current flight direction. Arrow up: keep going straight. Arrow down: turn around. Arrow left or right: turn that way. A compass ring around the arrow shows where north currently is.
-- **The same hint in words** (`ahead`, `behind`, `30 R`, ...) and the **distance to home** (metres, or feet with imperial units).
-- **The number of satellites** with a signal-style bar (red, yellow, green), plus altitude (above the home point) and ground speed.
+- **A home arrow** relative to your flight direction: up means straight on, down means turn around, left or right means turn that way. A compass ring around it shows north.
+- **The same hint in words** (`ahead`, `behind`, `30 R`, ...) and the **distance to home**.
+- **The number of satellites** with a signal bar, plus altitude above home and ground speed.
+- **GPS accuracy on the ground** (`PDOP 1.3`, with INAV and ArduPilot `HDOP`) in place of altitude and distance until you arm.
 
 Everything happens automatically:
 
-- **Home is set on its own, exactly like on the flight controller.** Once the GPS has a solid fix for a few seconds the radio says "Ready to fly", and the moment you arm, the launch position is stored and the radio says "Home set". That is the same instant the flight controller sets its own home point, so the arrow on the radio and the arrow in the goggles always agree. With INAV's home reset switch the radio follows the new home as well. (On a model that does not send its armed state, home is stored at the first stable fix instead.)
-- **Voice only when it matters.** The radio speaks on four events (ready to fly, home set, GPS signal lost, GPS signal back). There are no continuous announcements, and each event can be muted or replaced with your own sound file.
-- **Standing still or hovering slowly?** The flight direction comes from the GPS course over ground, which only exists while the model is moving. Below 6 km/h the widget therefore switches to the absolute direction instead.
-- **Lost the link?** If the telemetry connection is gone for good (landed out of range, crash), the widget freezes and keeps showing the **last known GPS position** of the model to help you find it.
+- **Home is set on its own, like on the flight controller.** Once the GPS fix is stable the radio says "Ready to fly"; when you arm, home is stored and the radio says "Home set".
+- **Voice only when it matters:** ready to fly, home set, GPS lost, GPS back. Each event can be muted or replaced with your own sound.
+- **Standing still or hovering slowly?** The compass ring turns north up and an `H` on it marks the direction to home (`SW 220°`), since there is no flight direction yet.
+- **Lost the link?** The widget keeps showing the **last known GPS position** of the model to help you find it.
 
 ---
 
@@ -183,12 +184,11 @@ For radios without a color display, or if you only want the voice announcements:
 
 ### 3. Try it out
 
-- Power the model, wait for the GPS fix and check on the radio's telemetry page that `GPS`, `Sats`, `GSpd` and `Hdg` show values.
-- On the ground the widget shows `Searching satellites` with the satellite count and the number needed (for example `4 Sats (min 6)`). Once enough satellites are locked (6 by default) for a few seconds, the radio says "Ready to fly" and the widget switches to the live view with `READY TO FLY` under the compass ring; the home arrow and the distance are still missing.
-- Arm the model: the radio says "Home set", and the arrow, the `H` on the ring (NorthUp) and the distance appear.
-- Fly away from the launch position: the distance grows, and once you are flying the arrow appears and points back to the launch position.
-- Switch the model off: after a moment the widget shows `Flight ended` with the last known coordinates, and after one minute it returns to `Waiting for telemetry`. The position is kept in the flight log at that moment, so you can still call it up in the settings tool days later.
-- With the function script you only hear the announcements: "Ready to fly" once the fix is stable, "Home set" when you arm, "GPS lost" and "GPS recovered" while flying.
+- Power the model and wait for the GPS fix. The radio's telemetry page should show values for `GPS`, `Sats`, `GSpd` and `Hdg`.
+- The widget shows `Searching satellites` (e.g. `4 Sats (min 6)`). Once the fix is stable, the radio says "Ready to fly" and the widget shows `READY TO FLY`.
+- Arm the model: the radio says "Home set". Fly away: the distance grows and the arrow points back home.
+- Switch the model off: the widget shows `Flight ended` with the last known coordinates. They stay in the flight log, see **Last flights** in the settings tool.
+- With the function script you only hear the announcements.
 
 ---
 
@@ -202,14 +202,13 @@ All settings are changed on the radio with the bundled **settings tool**. Make s
   - **Test**: plays the sound currently selected in that row (and the vibration, if enabled) so you can compare sounds on the spot.
   - **Haptic feedback**: `Off` (default) or `On`. When on, the radio vibrates with every event, independent of the sound, so a muted event still vibrates. GPS lost gives two pulses, every other event one.
   - **Haptic strength**: `Soft`, `Normal` or `Strong` (only shown while haptic feedback is on).
-  - **Units**: `Metric` (m, km/h, default) or `Imperial` (ft, mph). Altitude and speed are shown as the radio's sensors deliver them, so this only changes their labels; set the sensor units on the radio to match. The distance to home is computed from the coordinates and is converted to feet.
+  - **Units**: `Metric` (m, km/h, default) or `Imperial` (ft, mph). Set the units of the altitude and speed sensors on the radio to match.
+  - **GPS accuracy**: `On` (default) or `Off`.
   - **Reset to defaults**: restores the factory settings and clears the flight log.
-- **Last flights**: where the model was when the telemetry ended, for the last three flights. Each entry shows date, time, model name and the coordinates, next to a **QR code**. Scan it with a phone and the map app opens on that spot, which is how you walk up to a model that came down out of sight. The roller steps from the newest flight back to the oldest. The entries are written automatically at the end of every flight, so there is nothing to switch on.
+- **Last flights**: where the model was when the telemetry ended, for the last three flights. Each entry shows date, time, model name and the coordinates, next to a **QR code**. Scan it with a phone and the map app opens on that spot. The roller steps from the newest flight back to the oldest.
 - **About**: version number and the file locations used by the project.
 
-Press **Save** to store the settings. They are written to `/SCRIPTS/GPSHOMER/config.lua` and picked up by both variants the next time the model is loaded (model switch or reboot). Without this file the built-in defaults are used, so the tool is optional.
-
-Timing values such as the minimum ground speed for the arrow or how long the last position is shown are deliberately not in the tool. If you need to change them, they are listed with comments at the top of `core.lua`.
+Press **Save** to store the settings. They take effect the next time the model is loaded (model switch or reboot). Without saved settings the defaults apply, so the tool is optional.
 
 ---
 

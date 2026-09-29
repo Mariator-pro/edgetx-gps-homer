@@ -249,8 +249,8 @@ local S = {
   dialog    = nil,   -- { text, yes, no, onYes } or { rows = {{label,value},...} }
   picker    = nil,
   -- Settings editor working state
-  set        = nil,  -- { sats, haptic, hapStr, units, snd = { <event key> = idx } }
-  setField   = nil,  -- in-place edited field: "sats", "haptic", "hapStr" or "units"
+  set        = nil,  -- { sats, haptic, hapStr, units, dop, snd = { <event key> = idx } }
+  setField   = nil,  -- in-place edited field: "sats", "haptic", "hapStr", "units" or "dop"
   sndOpts    = nil,  -- per event key: picker options
   setEditing = false,
   setOrig    = nil,
@@ -665,7 +665,7 @@ local function enterSettings()
   local files = listSoundFiles()
   S.sndOpts = {}
   S.set     = { sats = S.cfg.homeMinSats, haptic = S.cfg.haptic, hapStr = S.cfg.hapticStrength,
-                units = S.cfg.units, snd = {} }
+                units = S.cfg.units, dop = S.cfg.dop, snd = {} }
   for _, ev in ipairs(EVENTS) do
     S.sndOpts[ev.key]  = buildSoundOptions(core.SOUND_DEFAULTS[ev.key], files)
     S.set.snd[ev.key]  = soundOptionIndex(S.sndOpts[ev.key], S.cfg.sounds[ev.key])
@@ -873,13 +873,14 @@ end
 -- ---------------------------------------------------------------------------
 
 -- Cursor rows: Min sats (1), the event rows (2..1+#EVENTS), Haptic on/off,
--- Haptic strength (hidden while haptic is off), Units, Reset, Back, Save. ENTER on an
+-- Haptic strength (hidden while haptic is off), Units, GPS accuracy, Reset, Back,
+-- Save. ENTER on an
 -- event row dives in; the roller then steps Sound -> Test and ENTER opens the
 -- picker / plays the focused cell.
 local ROW_SATS, ROW_EV1 = 1, 2
 local ROW_HAPTIC = ROW_EV1 + #EVENTS
-local ROW_HAPSTR, ROW_UNITS = ROW_HAPTIC + 1, ROW_HAPTIC + 2
-local ROW_RESET, ROW_BACK, ROW_SAVE = ROW_UNITS + 1, ROW_UNITS + 2, ROW_UNITS + 3
+local ROW_HAPSTR, ROW_UNITS, ROW_DOP = ROW_HAPTIC + 1, ROW_HAPTIC + 2, ROW_HAPTIC + 3
+local ROW_RESET, ROW_BACK, ROW_SAVE = ROW_DOP + 1, ROW_DOP + 2, ROW_DOP + 3
 local SET_ITEMS = ROW_SAVE
 local SET_SUBS      = { "snd", "test" }
 local SET_SUBS_MUTE = { "snd" }   -- Test dropped when the sound is Off
@@ -895,7 +896,8 @@ end
 
 local function settingsDirty()
   if S.set.sats ~= S.cfg.homeMinSats or S.set.haptic ~= S.cfg.haptic
-     or S.set.hapStr ~= S.cfg.hapticStrength or S.set.units ~= S.cfg.units then return true end
+     or S.set.hapStr ~= S.cfg.hapticStrength or S.set.units ~= S.cfg.units
+     or S.set.dop ~= S.cfg.dop then return true end
   for _, ev in ipairs(EVENTS) do
     if soundConfigValue(S.sndOpts[ev.key], S.set.snd[ev.key]) ~= S.cfg.sounds[ev.key] then return true end
   end
@@ -912,6 +914,7 @@ local function saveSettings()
   S.cfg.haptic         = S.set.haptic
   S.cfg.hapticStrength = S.set.hapStr
   S.cfg.units          = S.set.units
+  S.cfg.dop            = S.set.dop
   for _, ev in ipairs(EVENTS) do
     S.cfg.sounds[ev.key] = soundConfigValue(S.sndOpts[ev.key], S.set.snd[ev.key])
   end
@@ -955,14 +958,16 @@ end
 local function hintFor(cursor)
   if cursor == ROW_SATS then return "Home is set once this many sats are stable" end
   if cursor >= ROW_EV1 and cursor < ROW_HAPTIC then return eventOf(cursor).hint end
+  if cursor == ROW_DOP then return "DOP from the FC while disarmed, shown under SATS" end
   return nil
 end
 
 local function drawSettings()
   drawHeader("SETTINGS")
   -- Scrollable content rows; Back/Save stay fixed below. One shared hint row
-  -- sits under the event block while Min sats or an event is focused -- dropped,
-  -- not blanked, so the list never scrolls past an empty gap.
+  -- sits under the event block while Min sats or an event is focused (under the
+  -- GPS accuracy row while that is focused) -- dropped, not blanked, so the
+  -- list never scrolls past an empty gap.
   local rows, focus = {}, 1
   local function add(fn, isFocus)
     rows[#rows + 1] = fn
@@ -981,9 +986,10 @@ local function drawSettings()
     local row = ROW_EV1 + i - 1
     add(function(y) drawEventRow(row, y) end, S.cursor == row)
   end
-  if hint then
+  local function addHint()
     add(function(y) lcd.drawText(drawInfoBadge(COL1, y), y, hint, COLOR_THEME_PRIMARY1 + SMLSIZE) end)
   end
+  if hint and S.cursor ~= ROW_DOP then addHint() end
   add(function(y) drawChoiceRow(y, "Haptic feedback", S.set.haptic and "On" or "Off",
                                 S.cursor == ROW_HAPTIC, S.setEditing and S.setField == "haptic") end,
       S.cursor == ROW_HAPTIC)
@@ -997,6 +1003,10 @@ local function drawSettings()
   add(function(y) drawChoiceRow(y, "Units", UNIT_LABELS[S.set.units] or S.set.units,
                                 S.cursor == ROW_UNITS, S.setEditing and S.setField == "units") end,
       S.cursor == ROW_UNITS)
+  add(function(y) drawChoiceRow(y, "GPS accuracy", S.set.dop and "On" or "Off",
+                                S.cursor == ROW_DOP, S.setEditing and S.setField == "dop") end,
+      S.cursor == ROW_DOP)
+  if hint and S.cursor == ROW_DOP then addHint() end
   add(function(y) drawButton(PAD, y, "Reset to defaults", S.cursor == ROW_RESET) end, S.cursor == ROW_RESET)
   if S.cursor > ROW_RESET then focus = #rows end   -- on Back/Save show the list bottom
 
@@ -1018,8 +1028,8 @@ local function handleSettings(e)
   -- fields are clamped to LIMITS without wrap; ENTER keeps, EXIT reverts.
   if S.setEditing then
     local field = S.setField
-    if field == "haptic" then
-      if isNext(e) or isPrev(e) then S.set.haptic = not S.set.haptic end
+    if field == "haptic" or field == "dop" then
+      if isNext(e) or isPrev(e) then S.set[field] = not S.set[field] end
     elseif field == "units" then
       if isNext(e) or isPrev(e) then
         local c, idx = core.UNIT_CHOICES, 1
@@ -1085,6 +1095,8 @@ local function handleSettings(e)
       S.setField, S.setEditing, S.setOrig = "hapStr", true, S.set.hapStr
     elseif S.cursor == ROW_UNITS then
       S.setField, S.setEditing, S.setOrig = "units", true, S.set.units
+    elseif S.cursor == ROW_DOP then
+      S.setField, S.setEditing, S.setOrig = "dop", true, S.set.dop
     elseif S.cursor >= ROW_EV1 and S.cursor < ROW_HAPTIC then
       S.setDive, S.setSub = S.cursor, "snd"
     elseif S.cursor == ROW_RESET then

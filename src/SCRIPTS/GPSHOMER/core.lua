@@ -77,6 +77,10 @@ M.PARAMS = {
   HAPTIC          = false, -- Vibrate alongside an event sound (opt-in; config: haptic)
   HAPTIC_STRENGTH = 2,     -- Pulse-length tier: 1 = soft, 2 = normal, 3 = strong
   UNITS           = "metric", -- display units: "metric" (m, km/h) or "imperial" (ft, mph); config: units
+  DOP             = true,  -- show the FC's PDOP / HDOP while disarmed (MSP, ArduPilot passthrough); config: dop
+  DOP_POLL_T      = 1,     -- MSP request interval on the ground (s)
+  DOP_STALE_T     = 3,     -- a DOP older than this is not shown (s)
+  DOP_MAX_MISSES  = 5,     -- unanswered requests in a row before giving up
   COURSE_MIN_SPD = 6,      -- FR-10: km/h below which the GPS course is not usable
   COURSE_HYST    = 1,      -- km/h either side of COURSE_MIN_SPD before the course flips
   COURSE_HOLD_T  = 1,      -- speed must stay beyond the hysteresis band this long (s)
@@ -126,6 +130,7 @@ M.DEFAULTS = {
   haptic         = M.PARAMS.HAPTIC,
   hapticStrength = M.PARAMS.HAPTIC_STRENGTH,
   units          = M.PARAMS.UNITS,
+  dop            = M.PARAMS.DOP,
 }
 local DEFAULTS = M.DEFAULTS
 
@@ -355,6 +360,7 @@ function M.normalizeConfig(cfg)
     hapticStrength = clampNum(cfg.hapticStrength,
                     L.hapticStrength.min, L.hapticStrength.max, DEFAULTS.hapticStrength),
     units          = unitsOr(cfg.units, DEFAULTS.units),
+    dop            = boolOr(cfg.dop, DEFAULTS.dop),
     sounds = {
       ready = soundOr(snd.ready, nil),
       fix  = soundOr(snd.fix,  nil),
@@ -372,6 +378,7 @@ function M.applyConfigOverrides(cfg)
   M.PARAMS.HAPTIC          = n.haptic
   M.PARAMS.HAPTIC_STRENGTH = n.hapticStrength
   M.PARAMS.UNITS           = n.units
+  M.PARAMS.DOP             = n.dop
   for _, k in ipairs(M.SOUND_KEYS) do
     local v = n.sounds[k]
     if v == nil then v = M.SOUND_DEFAULTS[k] end
@@ -535,6 +542,27 @@ function M.armedFromFM(v)
   return not (last == "*" or last == "!" or last == "?"), true
 end
 
+-- Flight controller firmware from a disarmed flight-mode text, for the DOP
+-- source: "BF", "INAV", "AP" (ArduPilot) or nil when the text does not tell.
+-- Betaflight appends "*", "!" or "?" to its own short list of names; "!" and
+-- "?" only it uses. INAV sends "OK", "WAIT" or "!ERR". ArduPilot (RC_OPTIONS
+-- bit 12, or ELRS MAVLink mode) appends "*" to its own mode names. The two
+-- lists split Betaflight's names by whether ArduPilot uses them too (INAV never
+-- appends "*", so it does not matter here). Shared names (ACRO, ALTH, POSH, and
+-- Betaflight's STAB/MANU up to 4.5) stay nil.
+local BF_NAMES_NOT_AP  = { ANGL = true, HOR = true, AIR = true, RTH = true, PASS = true, PHFL = true, CHIR = true }
+local BF_NAMES_ALSO_AP = { ACRO = true, ALTH = true, POSH = true, STAB = true, MANU = true }
+function M.fcFromFM(v)
+  if type(v) ~= "string" or #v < 2 then return nil end
+  if INAV_DISARMED[v] then return "INAV" end
+  local last, name = string.sub(v, -1), string.sub(v, 1, -2)
+  if (last == "!" or last == "?") and v ~= "!FS!" then return "BF" end
+  if last ~= "*" then return nil end
+  if BF_NAMES_NOT_AP[name] then return "BF" end
+  if BF_NAMES_ALSO_AP[name] then return nil end
+  return "AP"
+end
+
 -- Rescue / failsafe / landing from the same text: "RTH" = GPS rescue flying
 -- (armed, no marker; "RTH*" is only the switch on the ground), INAV "WRTH" =
 -- RTH at the end of a mission, ArduPilot "RTL " (trailing space), "SRTL",
@@ -549,6 +577,116 @@ local ALERTS = {
 }
 function M.alertFromFM(v)
   return ALERTS[v]
+end
+
+-- ---------------------------------------------------------------------------
+-- MSP over CRSF: the widget asks the FC for MSP_RAW_GPS while disarmed and
+-- takes the DOP from the reply (Betaflight: PDOP, INAV: HDOP, both x100).
+-- Every request makes ELRS switch its telemetry ratio to 1:2 for about 5 s,
+-- which halves the stick packet rate; hence ground only.
+-- ---------------------------------------------------------------------------
+local MSP_REQ, MSP_RESP     = 0x7A, 0x7B
+local ADDR_FC, ADDR_RADIO   = 0xC8, 0xEA
+M.MSP_RAW_GPS = 106
+
+-- CRSF payload of an MSPv1 request without data: destination, origin, status
+-- (version 1, start flag, sequence 0..15), size 0, command. The MSP checksum is
+-- not sent over CRSF.
+function M.mspRequest(seq, cmd)
+  return { ADDR_FC, ADDR_RADIO, 0x30 + seq % 16, 0, cmd }
+end
+
+-- DOP from a popped MSP_RESP payload (MSPv1, single chunk: the 18-byte
+-- MSP_RAW_GPS reply always fits one frame). Returns nil for a frame that is not
+-- this reply, false for a firmware that predates the field, 0 while there is no
+-- fix yet (normal right after power-up), else the DOP.
+function M.parseRawGpsDop(data)
+  if type(data) ~= "table" or data[1] ~= ADDR_RADIO or data[2] ~= ADDR_FC then return nil end
+  local status = data[3] or 0
+  local start  = math.floor(status / 16) % 2 == 1
+  if status >= 128 or not start or math.floor(status / 32) % 4 ~= 1 then return nil end
+  if data[5] ~= M.MSP_RAW_GPS then return nil end
+  local size = data[4] or 0
+  if size < 18 or #data < 5 + 18 then return false end
+  local dop = data[22] + data[23] * 256
+  if data[6] == 0 then return 0 end
+  return dop / 100
+end
+
+-- HDOP from an ArduPilot passthrough frame (0x80, legacy 0x7F): ArduPilot sends
+-- them with RC_OPTIONS bit 8, the ELRS TX module in MAVLink mode always. Value
+-- 0x5002 (GPS status): fix in bits 4-5, HDOP in dm as 7 bits x 10^bit 6.
+-- Returns the HDOP, or nil when the frame carries none (or no 2D/3D fix). The
+-- saturated 0xFF (127 x 10 dm) is what an unknown HDOP turns into (MAVLink eph
+-- 65535), so it counts as none.
+local function gpsStatusHdop(v)
+  if math.floor(v / 16) % 4 < 2 then return nil end
+  if math.floor(v / 64) % 256 == 0xFF then return nil end
+  local dm = (math.floor(v / 128) % 128) * (math.floor(v / 64) % 2 == 1 and 10 or 1)
+  if dm == 0 then return nil end
+  return dm / 10
+end
+local function u32(d, i) return d[i] + d[i + 1] * 256 + d[i + 2] * 65536 + d[i + 3] * 16777216 end
+function M.parsePassthroughHdop(cmd, data)
+  if (cmd ~= 0x80 and cmd ~= 0x7F) or type(data) ~= "table" then return nil end
+  if data[1] == 0xF0 and #data >= 7 and data[2] + data[3] * 256 == 0x5002 then
+    return gpsStatusHdop(u32(data, 4))
+  elseif data[1] == 0xF2 and #data >= 8 then
+    for i = 0, math.min(data[2] or 0, 9) - 1 do
+      local p = 3 + 6 * i
+      if #data >= p + 5 and data[p] + data[p + 1] * 256 == 0x5002 then
+        return gpsStatusHdop(u32(data, p + 2))
+      end
+    end
+  end
+  return nil
+end
+
+-- One DOP step per tick: drain MSP replies and passthrough frames, send the
+-- next MSP request when due. Requests stop after DOP_MAX_MISSES unanswered ones
+-- or a reply without the DOP field (ArduPilot does not answer MSP, older
+-- firmware lacks the field); a reply without a fix keeps asking. Returns the
+-- last DOP while it is fresh, else nil.
+local MSP_POP_MAX = 20
+local function pollDop(state, ground, now)
+  local P = M.PARAMS
+  -- After arming, a reply already on its way is still collected for a moment.
+  local late   = state.dopWaiting and now - state.dopSentAt < P.DOP_STALE_T * 1000
+  -- Drained on the whole ground (not only while asking): ArduPilot's
+  -- passthrough HDOP comes unasked.
+  if (ground or late) and crossfireTelemetryPop then
+    for _ = 1, MSP_POP_MAX do
+      local cmd, data = crossfireTelemetryPop()
+      if cmd == nil then break end
+      if cmd == MSP_RESP then
+        local dop = M.parseRawGpsDop(data)
+        if dop ~= nil then
+          state.dopWaiting = false
+          state.dopMisses  = dop and 0 or P.DOP_MAX_MISSES   -- only a missing field gives up
+          if dop and dop > 0 then state.dop, state.dopAt = dop, now end
+        end
+      else
+        local hdop = M.parsePassthroughHdop(cmd, data)
+        if hdop then state.dop, state.dopAt, state.fcKind = hdop, now, "AP" end
+      end
+    end
+  end
+  -- Decided after draining, so a passthrough frame that just came in counts.
+  -- ArduPilot answers no MSP: no requests (and no telemetry boost) at all.
+  local active = ground and state.dopMisses < P.DOP_MAX_MISSES and state.fcKind ~= "AP"
+  if active and crossfireTelemetryPush
+     and (state.dopSentAt == nil or now - state.dopSentAt >= P.DOP_POLL_T * 1000)
+     and crossfireTelemetryPush() then   -- nil: no CRSF module, false: buffer busy
+    if state.dopWaiting then state.dopMisses = state.dopMisses + 1 end
+    if state.dopMisses < P.DOP_MAX_MISSES then
+      crossfireTelemetryPush(MSP_REQ, M.mspRequest(state.dopSeq, M.MSP_RAW_GPS))
+      state.dopSeq, state.dopSentAt, state.dopWaiting = (state.dopSeq + 1) % 16, now, true
+    else
+      state.dopWaiting = false
+    end
+  end
+  if state.dopAt and now - state.dopAt <= P.DOP_STALE_T * 1000 then return state.dop end
+  return nil
 end
 
 -- Read + validate every sensor. Invalid samples become nil so evaluate() keeps
@@ -578,6 +716,17 @@ function M.readSnapshot(state, now)
   local fm = readPresent(has, S, "fm")
   local armed, armedKnown = M.armedFromFM(fm)
 
+  -- DOP only for a caller that asked for it (the widget) and only on the ground
+  -- before the first flight: after a landing ALT and DIST stay (finding the
+  -- model), and ELRS is not switched to 1:2 again.
+  -- The firmware is remembered from the first text that tells (Betaflight shows
+  -- "!" or "?" right after power-up, before the fix or during the boot grace).
+  local dop
+  if state.useMsp and M.PARAMS.DOP then
+    if not state.fcKind then state.fcKind = M.fcFromFM(fm) end
+    dop = pollDop(state, telem and armedKnown and not armed and not state.homeSet, now)
+  end
+
   return {
     telem         = telem,
     gps           = gps,
@@ -589,6 +738,9 @@ function M.readSnapshot(state, now)
     armedKnown    = armedKnown,
     alert         = M.alertFromFM(fm),
     homeReset     = fm == "HRST",   -- INAV: home moved to here by switch
+    dop           = dop,
+    -- Betaflight replies with PDOP, INAV and ArduPilot's passthrough carry HDOP
+    dopKind       = (state.fcKind == "INAV" or state.fcKind == "AP") and "HDOP" or "PDOP",
     sensorMissing = sensorMissing,
   }
 end
@@ -647,6 +799,14 @@ function M.newState()
   local s = {}
   M.resetFlight(s)
   s.status = "NO_TELEM"
+  -- MSP polling lives across flights (resetFlight runs on the first tick too);
+  -- a new widget instance, e.g. after a model change, tries again.
+  s.dop, s.dopAt = nil, nil   -- last DOP over MSP and when it came
+  s.dopSentAt    = nil        -- last MSP request
+  s.dopWaiting   = false      -- request sent, reply outstanding
+  s.dopMisses    = 0          -- unanswered in a row
+  s.dopSeq       = 0
+  s.fcKind       = nil        -- "BF" / "INAV" / "AP" once the FM text or a passthrough frame told
   return s
 end
 
@@ -654,6 +814,13 @@ end
 -- State machine (pure: mutates `state`, returns a result table; no I/O)
 -- States: NO_TELEM / ACQUIRING / READY / ACTIVE / ENDED. `now` is in ms.
 -- ---------------------------------------------------------------------------
+-- DOP only while disarmed and home not set yet (before the first flight).
+local function setDop(result, snap)
+  if snap.armedKnown and not snap.armed and snap.dop then
+    result.dop, result.dopKind = snap.dop, snap.dopKind
+  end
+end
+
 function M.evaluate(state, snap, now)
   local P      = M.PARAMS
   local result = {}
@@ -809,6 +976,7 @@ function M.evaluate(state, snap, now)
       result.courseValid   = M.updateCourseValid(state, state.lastGspd, now)
       if result.courseValid then result.course = state.lastHdg or 0 end
       result.sensorMissing = snap.sensorMissing
+      setDop(result, snap)
       return result
     end
     state.fixLostSince = nil   -- clean slate for the ACTIVE debounce

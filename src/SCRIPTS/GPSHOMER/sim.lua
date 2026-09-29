@@ -11,7 +11,8 @@
 --
 -- Timeline (seconds after load):
 --   0-6    sats climb 3 -> 9 on the ground   -> ACQUIRING
---   6-10   disarmed with a stable fix        -> READY ("Ready to fly")
+--   6-10   disarmed with a stable fix        -> READY ("Ready to fly"),
+--          PDOP row under SATS instead of ALT/DIST (as if the FC answered MSP)
 --   10     armed                             -> home set
 --   10-14  armed, still on the ground         -> AT HOME (no course, no bearing)
 --   14-44  fly out heading 0 (north), accelerating 0 -> 40 km/h over 8 s
@@ -84,6 +85,11 @@ return function(core)
     end
     step(now, gspd, hdg)
 
+    -- DOP falls with the sat count; only on the ground and when switched on
+    -- (the core shows it before the first flight only).
+    local dop
+    if telem and not armed and core.PARAMS.DOP and sats >= 4 then dop = 12 / sats end
+
     return {
       telem         = telem,
       gps           = telem and { lat = lat, lon = lon } or nil,
@@ -94,6 +100,8 @@ return function(core)
       armed         = armed,
       armedKnown    = true,
       alert         = core.alertFromFM(fm),
+      dop           = dop,
+      dopKind       = "PDOP",
       sensorMissing = false,
     }
   end

@@ -568,7 +568,7 @@ local DIST_F    = IMPERIAL and 3.28084 or 1
 local LIST_ROWS = {
   { key = "alt",  label = "ALT",  unit = IMPERIAL and "ft"  or "m",    ref = "9999"  },
   { key = "dist", label = "DIST", unit = IMPERIAL and "ft"  or "m",    ref = "9999"  },
-  { key = "spd",  label = "SPD",  unit = IMPERIAL and "mph" or "km/h", ref = "999.9" },
+  { key = "spd",  label = "SPD",  unit = IMPERIAL and "mph" or "km/h", ref = "99.9"  },
 }
 local LABEL_GAP = sx(6)
 -- Header band height plus the gap to the sats block (sx(1), anchored so the
@@ -606,6 +606,28 @@ local function satsBlockW(bf)
   return textW("99", bf) + LABEL_GAP + textW("SATS", SMLSIZE) + LABEL_GAP + BARS_W
 end
 
+-- DOP from the FC on the ground ("PDOP 1.3", INAV / ArduPilot "HDOP"): it
+-- takes the ALT row right under the sats block and DIST stays empty (before the
+-- first flight both are "--" anyway); at arming the DOP goes and ALT and DIST
+-- come back. Narrower than the DIST reference, so the column never changes.
+local function dopText(dop)
+  if dop < 9.95 then return string.format("%.1f", dop) end
+  return string.format("%d", math.min(99, math.floor(dop + 0.5)))
+end
+-- Colour stages like the sats: below `good` green, below `fair` yellow, else
+-- red. PDOP includes the vertical part and runs about 1.5 to 2 times HDOP.
+local DOP_STAGES = { HDOP = { good = 1.5, fair = 2.5 }, PDOP = { good = 2.5, fair = 4.0 } }
+local function dopColor(dop, kind)
+  local s = DOP_STAGES[kind] or DOP_STAGES.PDOP
+  if dop < s.good then return COLORS.accent end
+  if dop < s.fair then return WARN_COL end
+  return CRIT_COL
+end
+local function listRows(d)
+  if not d.dop then return LIST_ROWS end
+  return { { key = "dop", label = d.dopKind or "PDOP" }, false, LIST_ROWS[3] }
+end
+
 -- Column width from fixed references (not the live text) so it never jumps.
 local function listColW(bf)
   local lw, vw = 0, 0
@@ -620,9 +642,13 @@ end
 local function listPitch(H) return math.max(fontH(LIST_FONT), math.floor(H * 0.20)) end
 
 local function listValue(r, d)
+  if r.key == "dop"  then return dopText(d.dop) end
   if r.key == "dist" then return fmtDist(d.distanceM and d.distanceM * DIST_F) end
   if r.key == "alt"  then return d.alt  and string.format("%d",   math.floor(d.alt + 0.5)) or "--" end
-  return d.gspd and string.format("%.1f", d.gspd) or "--"
+  if not d.gspd then return "--" end
+  -- From 100 on without the decimal, so "99.9" is the widest value (narrow column).
+  if d.gspd >= 99.95 then return string.format("%d", math.floor(d.gspd + 0.5)) end
+  return string.format("%.1f", d.gspd)
 end
 
 -- Sats colour by bar stage: <= 1 bar or debounced fix loss red, 2 bars yellow,
@@ -648,15 +674,25 @@ local function drawSatsBlock(x0, y, colW, bf, d)
   return satsBlockH(bf)
 end
 
+-- One list row: label left, value (+ unit) right-aligned; false = empty slot.
+local function drawRow(x0, y, colW, r, d)
+  if not r then return end
+  local v = listValue(r, d)
+  dtext(x0, y, r.label, COLORS.muted, LIST_FONT)
+  if r.key == "dop" then
+    dtext(x0 + colW - textW(v, LIST_FONT), y, v, dopColor(d.dop, d.dopKind), LIST_FONT)
+  else
+    drawValueUnit(x0 + colW - valueUnitW(v, r.unit, LIST_FONT), y, v, r.unit, COLORS.fg, LIST_FONT)
+  end
+end
+
 -- Rows sit in equal bands stacked up from the bottom edge (`bottom` = tile
 -- bottom, pad from the zone edge), each row's text centred in its band; spare
 -- height opens up between the sats block and the list.
 local function drawList(x0, bottom, colW, rows, rowH, d)
   local y = bottom - #rows * rowH + math.floor((rowH - fontH(LIST_FONT)) / 2)
   for _, r in ipairs(rows) do
-    local v = listValue(r, d)
-    dtext(x0, y, r.label, COLORS.muted, LIST_FONT)
-    drawValueUnit(x0 + colW - valueUnitW(v, r.unit, LIST_FONT), y, v, r.unit, COLORS.fg, LIST_FONT)
+    drawRow(x0, y, colW, r, d)
     y = y + rowH
   end
 end
@@ -859,7 +895,7 @@ local function drawActiveFull(W, H, x0, y0, d)
   local Hl   = H - headerH()
   local colW = listColW(MIDSIZE)
   drawSatsBlock(x0, top, colW, MIDSIZE, d)
-  drawList(x0, y0 + H, colW, LIST_ROWS, listPitch(Hl), d)
+  drawList(x0, y0 + H, colW, listRows(d), listPitch(Hl), d)
   local bx = x0 + colW + GAP
   drawDirection(bx, top, x0 + W - bx, Hl, d, sx(60), false)
 end
@@ -881,11 +917,7 @@ local function drawActiveMedium(W, H, x0, y0, d)
   local bf   = fitFont("99", math.floor(W * 0.5), math.floor((rowY(3) - sx(2) - top) * 0.5), MIDSIZE)
   local colW = listColW(bf)
   drawSatsBlock(x0, top, colW, bf, d)
-  for i, r in ipairs(LIST_ROWS) do
-    local y, v = rowY(i + 1), listValue(r, d)
-    dtext(x0, y, r.label, COLORS.muted, LIST_FONT)
-    drawValueUnit(x0 + colW - valueUnitW(v, r.unit, LIST_FONT), y, v, r.unit, COLORS.fg, LIST_FONT)
-  end
+  for i, r in ipairs(listRows(d)) do drawRow(x0, rowY(i + 1), colW, r, d) end
   local bx = x0 + colW + GAP
   drawDirection(bx, top, x0 + W - bx, y0 + H - top, d, sx(60), false)
 end
@@ -908,8 +940,9 @@ local function drawActive(W, H, x0, y0, d)
     local nRows = math.floor((H + sx(1)) / (smlH + sx(1)))
     local hdr   = (nRows >= 2) and (smlH + sx(1)) or 0
     local altH  = (nRows >= 3) and (smlH + sx(1)) or 0
-    local altR  = LIST_ROWS[1]
-    local altW  = (altH > 0) and (textW(altR.label, SMLSIZE) + LABEL_GAP + valueUnitW(altR.ref, altR.unit, LIST_FONT)) or 0
+    local altR  = listRows(d)[1]   -- ALT, on the ground the DOP (narrower: width from ALT)
+    local altW  = (altH > 0) and (textW(LIST_ROWS[1].label, SMLSIZE) + LABEL_GAP
+                  + valueUnitW(LIST_ROWS[1].ref, LIST_ROWS[1].unit, LIST_FONT)) or 0
     local bfS   = fitFont("99", math.floor(W * 0.5), H - hdr - altH, MIDSIZE)
     local colW  = math.max(hdr > 0 and headerW() or 0, satsBlockW(bfS), altW)
     local rSide = math.floor(math.min(W - colW - GAP, H) / 2)
@@ -984,7 +1017,7 @@ local function drawTile(ctx, z, x0, y0, W, H)
       status = st, rel = ctx.smooth.rel, bearingToHome = r.bearingToHome, sector = r.sector,
       courseValid = r.courseValid, course = ctx.smooth.course, distanceM = r.distanceM, sats = r.sats,
       alt = r.alt, gspd = r.gspd, fixLost = r.fixLost, noHome = r.noHome, atHome = r.atHome,
-      alert = r.alert,
+      alert = r.alert, dop = r.dop, dopKind = r.dopKind,
     }
     drawActive(W, H, x0, y0, d)
     if linkUp then drawHeartbeat(ctx) end
@@ -1012,7 +1045,10 @@ local function create(zone, opts)
     zone = zone, options = opts,
     lastTick = 0, errorStreak = 0, fatalError = false, result = nil,
   }
-  if core then ctx.state = core.newState() end
+  if core then
+    ctx.state = core.newState()
+    ctx.state.useMsp = true   -- DOP over MSP: the widget shows it, the voice script does not
+  end
   return ctx
 end
 
