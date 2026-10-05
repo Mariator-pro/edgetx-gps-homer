@@ -3,8 +3,9 @@
 -- =====================================================================
 -- SD card path: /SCRIPTS/FUNCTIONS/gpshom.lua
 -- Requires the shared module /SCRIPTS/GPSHOMER/core.lua on the SD card.
--- Plays the home-set / GPS-lost / GPS-recovered events (voice and haptic)
--- without any display, so it also runs on radios without a color screen.
+-- Plays the ready / home-set / GPS-lost / GPS-recovered / max-altitude events
+-- (voice and haptic) without any display, so it also runs on radios without a
+-- color screen.
 -- Do not run it alongside the widget: both would announce every event.
 -- =====================================================================
 -- SPDX-License-Identifier: GPL-2.0-only

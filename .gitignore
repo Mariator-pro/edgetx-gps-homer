@@ -40,5 +40,8 @@ src/RADIO
 
 # Runtime data
 config.lua
-flights.lua
+src/SCRIPTS/GPSHOMER/flights.lua
+
+# Simulator-only flight script
+src/SCRIPTS/GPSHOMER/sim.lua
 CHANGELOG.md

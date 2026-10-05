@@ -33,14 +33,18 @@ local function sx(v) return math.floor(v * S + 0.5) end
 -- Shared core module, loaded once for all instances. If it cannot be loaded the
 -- widget shows a "Core missing" tile instead of evaluating anything (NFR-2).
 -- ---------------------------------------------------------------------------
-local CORE_PATH = "/SCRIPTS/GPSHOMER/core.lua"
-local core
+local CORE_PATH    = "/SCRIPTS/GPSHOMER/core.lua"
+local COMPASS_PATH = "/SCRIPTS/GPSHOMER/compass.lua"   -- compass drawing, shared with other widgets
+local core, compass
 do
-  local chunk = loadScript and loadScript(CORE_PATH)
-  if chunk then
-    local ok, mod = pcall(chunk)
-    if ok then core = mod end
+  local function load(path)
+    local chunk = loadScript and loadScript(path)
+    if chunk then
+      local ok, mod = pcall(chunk)
+      if ok then return mod end
+    end
   end
+  core, compass = load(CORE_PATH), load(COMPASS_PATH)   -- no compass: the core lists it as setup error
 end
 
 -- Tick throttle (core.PARAMS.TICK_MS, in getTime's 10 ms units) so the update
@@ -189,31 +193,22 @@ end
 
 -- Shared with the tool, so both read identically. Guarded like every other
 -- core lookup here: without core the widget only draws the reinstall tile.
-local dms = core and core.formatDMS
+local coord = core and core.formatCoord
 
--- Degree label from the nose-relative angle. Thresholds come from core.PARAMS
--- (never hard-coded): |rel| <= AHEAD_DEG -> "ahead", >= BEHIND_DEG -> "behind",
--- otherwise the magnitude with an L/R side.
-local function relLabel(rel)
-  if not rel then return "" end
-  local a = math.abs(rel)
-  if a <= core.PARAMS.AHEAD_DEG then return "ahead" end
-  if a >= core.PARAMS.BEHIND_DEG then return "behind" end
-  return string.format("%d %s", math.floor(a + 0.5), (rel > 0) and "R" or "L")
-end
 
 -- ---------------------------------------------------------------------------
 -- Heading + status/error tiles (shared helper, Spec 4.1)
 -- ---------------------------------------------------------------------------
 
--- Brand header for the ACTIVE tile: accent square + "GPS-HOMER", SMLSIZE.
-local function headerW() return sx(5) + sx(3) + textW("GPS-HOMER", SMLSIZE) end
-local function drawHeader(x, y)
+-- Page header: accent square + "GPS", SMLSIZE; the
+-- error tiles pass the brand name instead.
+local function headerW(label) return sx(5) + sx(3) + textW(label or "GPS", SMLSIZE) end
+local function drawHeader(x, y, label)
   local h  = fontH(SMLSIZE)
   local sq = sx(5)
   lcd.drawFilledRectangle(x, y + math.floor((h - sq) / 2), sq, sq, BRAND)
-  dtext(x + sq + sx(3), y, "GPS-HOMER", BRAND, SMLSIZE)
-  return headerW()
+  dtext(x + sq + sx(3), y, label or "GPS", BRAND, SMLSIZE)
+  return headerW(label)
 end
 
 -- Decorative googly eyes beside the brand heading (error tiles only): pupils
@@ -249,7 +244,7 @@ end
 -- tiles (ENDED and the splash tiles stay calm).
 local function drawBrandHeading(eyes)
   local pad  = sx(4)
-  local used = drawHeader(pad, pad)   -- same square + label as the ACTIVE header
+  local used = drawHeader(pad, pad, "GPS-HOMER")   -- same square as the page header
   if eyes then
     drawMascotEyes(pad + used + sx(6), pad, sx(20), math.max(fontH(SMLSIZE), sx(14)))
   end
@@ -308,7 +303,7 @@ local function drawWaitingStatus(cx, y, base)
   if n > 0 then dtext(startX + textW(base, SMLSIZE), y, string.rep(".", n), COLORS.muted, SMLSIZE) end
 end
 
--- Splash tile (NO_TELEM / ACQUIRING): big centred GPS-HOMER title over the
+-- Splash tile (WAITING / ACQUIRING): big centred GPS-HOMER title over the
 -- animated status line and an optional third line. The title font is sized to
 -- a fixed-width anchor (one step smaller than what fits 95 % x 50 %) so it does
 -- not depend on the status text. Drop order on short zones: title, third line.
@@ -365,174 +360,30 @@ local function rot(cx, cy, radius, angDeg, relDeg)
          math.floor(cy - radius * math.cos(a) + 0.5)
 end
 
--- Filled triangle with an outline fallback for builds without the filled variant
--- (verify on the simulator; the render is pcall-wrapped regardless).
-local function fillTri(x1, y1, x2, y2, x3, y3, col)
-  if lcd.drawFilledTriangle then
-    lcd.drawFilledTriangle(x1, y1, x2, y2, x3, y3, col)
-  elseif lcd.drawTriangle then
-    lcd.drawTriangle(x1, y1, x2, y2, x3, y3, col)
-  end
-end
+-- Arrow from the shared compass (notched dart, tip at radius r).
+local function drawArrow(cx, cy, r, deg, col) compass.arrow(cx, cy, r, deg, col) end
 
--- Filled dart with a tail notch ("paper plane"), rotated by rel. Four points:
--- tip (r, 0), wings (r, +/-140), tail notch (0.35 r, 180); drawn as two filled
--- triangles (tip-wingL-notch, tip-notch-wingR). Foreground fill: neutral, so it
--- is never read as part of the sats traffic light.
-local function drawArrow(cx, cy, r, relDeg, col)
-  local tx, ty = rot(cx, cy, r, 0, relDeg)
-  local lx, ly = rot(cx, cy, r, -140, relDeg)
-  local rx, ry = rot(cx, cy, r, 140, relDeg)
-  local nx, ny = rot(cx, cy, r * 0.35, 180, relDeg)
-  fillTri(tx, ty, lx, ly, nx, ny, col)
-  fillTri(tx, ty, nx, ny, rx, ry, col)
-end
+-- House on the home point, from the shared compass.
+local function drawHouse(cx, cy, r, col) compass.house(cx, cy, r, col, COLORS.track) end
 
--- Small house (standing on the home point): filled roof over a filled body,
--- door in track colour so it reads as a house on both themes. Radius r like
--- the arrow; the whole icon spans about 1.5 r and is centred on (cx, cy).
-local function drawHouse(cx, cy, r, col)
-  local roofTop, eave, base = cy - math.floor(r * 0.75), cy - math.floor(r * 0.1), cy + math.floor(r * 0.75)
-  local halfRoof, halfBody = math.floor(r * 0.85), math.floor(r * 0.6)
-  fillTri(cx, roofTop, cx - halfRoof, eave, cx + halfRoof, eave, col)
-  lcd.setColor(CUSTOM_COLOR, col)
-  lcd.drawFilledRectangle(cx - halfBody, eave, 2 * halfBody, base - eave, CUSTOM_COLOR)
-  local dw = math.max(2, math.floor(r * 0.3))
-  local dh = math.max(3, math.floor(r * 0.45))
-  lcd.setColor(CUSTOM_COLOR, COLORS.track)
-  lcd.drawFilledRectangle(cx - math.floor(dw / 2), base - dh, dw, dh, CUSTOM_COLOR)
-end
+-- Space reserved outside the ring for the letters: the shared compass puts them
+-- on its letter track; 75 % of the reported SMLSIZE height (generous leading,
+-- glyphs about half of it) plus the half band.
+local function ringMargin() return math.floor(fontH(SMLSIZE) * 0.75) + sx(2) end
 
--- Space reserved outside the ring for the letters: 75 % of the reported
--- SMLSIZE height (the reported height carries generous leading; glyphs are
--- about half of it), so the ring does not shrink for empty leading.
-local function ringMargin() return math.floor(fontH(SMLSIZE) * 0.75) end
+local RING_W = math.max(2, sx(2))   -- home dot and arrow inset in the boxes without a ring
 
--- Compass ring: a band in track colour (RING_W thick) with N/E/S/W outside it
--- and short tick marks at the intercardinals, all rotated by `rot` (Nose up:
--- -course, so they show where north lies relative to the nose; North up: 0).
-local CARDINALS = { "N", "E", "S", "W" }
-local RING_W    = math.max(2, sx(2))   -- ring band thickness
-local TICK_LEN  = math.max(3, sx(4))   -- intercardinal tick length outside the ring
-
--- Crosshair centred on (cx, cy): position known, heading not (hovering below
--- the course threshold). Arms half the arrow radius, RING_W thick.
-local function drawCrosshair(cx, cy, r, col)
-  r = math.max(sx(3), math.floor(r / 2))
-  local t, h = RING_W, math.floor(RING_W / 2)
-  lcd.setColor(CUSTOM_COLOR, col)
-  lcd.drawFilledRectangle(cx - r, cy - h, 2 * r, t, CUSTOM_COLOR)
-  lcd.drawFilledRectangle(cx - h, cy - r, t, 2 * r, CUSTOM_COLOR)
-end
-
--- Ring band: annulus when the build has it, else stacked circles. A full
--- 0..360 annulus draws nothing (EdgeTX turns it into a zero-length arc), so
--- the band is two half arcs; width = outer - inner radius.
-local function drawRing(cx, cy, R)
-  lcd.setColor(CUSTOM_COLOR, COLORS.track)
-  if lcd.drawAnnulus then
-    lcd.drawAnnulus(cx, cy, R - RING_W, R, 0, 180, CUSTOM_COLOR)
-    lcd.drawAnnulus(cx, cy, R - RING_W, R, 180, 360, CUSTOM_COLOR)
-  elseif lcd.drawCircle then
-    for i = 0, RING_W - 1 do lcd.drawCircle(cx, cy, R - i, CUSTOM_COLOR) end
-  end
-end
--- Text centred on a circle of radius `tr` at angle `ang` (0 = up, clockwise).
-local function drawRingText(cx, cy, tr, ang, txt, col)
-  local x, y = rot(cx, cy, tr, ang, 0)
-  dtext(x - math.floor(textW(txt, SMLSIZE) / 2), y - math.floor(fontH(SMLSIZE) / 2), txt, col, SMLSIZE)
-end
--- Lubber line (Nose up): a fixed filled triangle at 12 o'clock on the letter
--- radius, tip towards the ring; the letter that turns underneath is left out.
-local function drawNoseMark(cx, cy, tr)
-  local h = math.max(3, math.floor(fontH(SMLSIZE) * 0.4))   -- half height
-  local w = math.max(2, math.floor(h * 0.6))                 -- half width: slim
-  local y = cy - tr
-  fillTri(cx - w, y - h, cx + w, y - h, cx, y + h, COLORS.fg)
-end
-
--- `skipAng` (optional): a cardinal that would touch the H badge drawn there
--- (half letter + badge radius) is left out; in Nose up the nose mark at 0
--- deg does the same.
--- `compact`: the bare band (no letters, ticks or nose mark) for boxes too
--- low for the letter margin, so the ring can use the whole box.
--- `northUp` (optional): force the fixed map orientation without the nose mark
--- (course unknown); defaults to the widget option.
-local NORTH_UP = false
-local function drawCompass(cx, cy, R, rotDeg, skipAng, compact, northUp)
-  if northUp == nil then northUp = NORTH_UP end
-  drawRing(cx, cy, R)
-  local tr = R + math.floor(fontH(SMLSIZE) / 2)   -- letters outside the ring
-  local minSep = math.deg((textW("W", SMLSIZE) / 2 + fontH(SMLSIZE) / 2) / tr)
-  if compact then return tr end
-  if not northUp then skipAng = 0; drawNoseMark(cx, cy, tr) end
-  for i, c in ipairs(CARDINALS) do
-    local ang  = (i - 1) * 90 + rotDeg
-    local diff = skipAng and math.abs(((ang - skipAng + 540) % 360) - 180) or 999
-    if diff > minSep then drawRingText(cx, cy, tr, ang, c, COLORS.muted) end
-  end
-  -- Tick marks: at the cardinals a short tick inside the band (the letter sits
-  -- outside); at the intercardinals a longer tick crossing the band, inside to
-  -- outside. The outer part is skipped under the H badge / nose mark.
-  if lcd.drawLine then
-    lcd.setColor(CUSTOM_COLOR, COLORS.track)   -- same colour as the band
-    local inner  = R - RING_W
-    local tickIn = math.max(2, math.floor(TICK_LEN * 2 / 3))   -- inner part a third shorter
-    for i = 0, 7 do
-      local ang  = i * 45 + rotDeg
-      local x1, y1 = rot(cx, cy, inner - tickIn, ang, 0)
-      local rOut = inner
-      if i % 2 == 1 then
-        local diff = skipAng and math.abs(((ang - skipAng + 540) % 360) - 180) or 999
-        rOut = (diff > minSep) and (R + 2 + TICK_LEN) or R
-      end
-      local x2, y2 = rot(cx, cy, rOut, ang, 0)
-      lcd.drawLine(x1, y1, x2, y2, SOLID, CUSTOM_COLOR)
-    end
-  end
-  return tr
-end
+local function drawCrosshair(cx, cy, r, col) compass.crosshair(cx, cy, r, RING_W, col) end
 
 -- Compass mode (widget option): 1 Nose up = OSD style, up is the flight
 -- direction, the arrow is the steering hint to home, the ring turns with the
 -- course. 2 North up = map style, the ring is fixed, the arrow is the course
--- and an "H" outside the ring marks the bearing to home; a cardinal letter
--- that would sit under the H is left out. Boxes too small for a ring keep the
--- map style with a home dot on the rim (see drawDirection).
--- Home marker on a north-up ring: an H badge outside on the letter radius, or
--- (compact: no room outside) a filled dot on the band.
-local function drawHomeMark(cx, cy, R, tr, bearing, compact)
-  if not bearing then return end
-  if compact then
-    local hx, hy = rot(cx, cy, R - math.floor(RING_W / 2), bearing, 0)
-    lcd.drawFilledCircle(hx, hy, RING_W + sx(1), COLORS.fg)
-    return
-  end
-  -- H in a thin circle so the marker reads as a badge, not a fifth letter.
-  if lcd.drawCircle then
-    local hx, hy = rot(cx, cy, tr, bearing, 0)
-    lcd.setColor(CUSTOM_COLOR, COLORS.fg)
-    lcd.drawCircle(hx, hy, math.floor(fontH(SMLSIZE) / 2) - sx(1), CUSTOM_COLOR)
-  end
-  drawRingText(cx, cy, tr, bearing, "H", COLORS.fg)
-end
-
--- Course unknown (hovering): the ring holds north up in both modes, the H
--- marks the bearing to home and a crosshair replaces the arrow.
+-- and an H on the ring marks home. Drawing in the shared compass.lua.
+local NORTH_UP = false
+local function compassColors() return { track = COLORS.track, fg = COLORS.fg, muted = COLORS.muted } end
 local function drawCompassArrow(cx, cy, R, d, compact)
-  local r = math.floor(R * 0.55)
-  if not d.courseValid then
-    local tr = drawCompass(cx, cy, R, 0, d.bearingToHome, compact, true)
-    drawHomeMark(cx, cy, R, tr, d.bearingToHome, compact)
-    drawCrosshair(cx, cy, r, COLORS.fg)
-  elseif NORTH_UP then
-    local tr = drawCompass(cx, cy, R, 0, d.bearingToHome, compact)
-    drawArrow(cx, cy, r, d.course or 0, COLORS.fg)
-    drawHomeMark(cx, cy, R, tr, d.bearingToHome, compact)
-  else
-    drawCompass(cx, cy, R, -(d.course or 0), nil, compact)
-    drawArrow(cx, cy, r, d.rel, COLORS.fg)
-  end
+  compass.draw(cx, cy, R, { course = d.courseValid and (d.course or 0) or nil, rel = d.rel,
+                            bearing = d.bearingToHome }, NORTH_UP, compact, compassColors())
 end
 
 -- Ring radius for a W x areaH box, capped at rCap: with the letters outside
@@ -559,8 +410,8 @@ local GAP      = sx(4)
 -- (default font in MEDIUM), "SATS" caption and the signal bars beside it on
 -- its baseline. Below it the value list in SMLSIZE: one row per metric, label
 -- left (muted), value+unit right-aligned so the numbers line up.
--- Units come from the config (read once with core), so the rows are fixed at
--- load. ALT and SPD are shown as the radio's sensors deliver them (the sensor
+-- Units follow the radio's system setting (read once with core), so the rows
+-- are fixed at load. ALT and SPD are shown as the radio's sensors deliver them (the sensor
 -- unit is set on the radio), so the setting only labels them; the distance is
 -- computed from the coordinates in metres and is scaled to the display unit.
 local IMPERIAL  = core and core.PARAMS.UNITS == "imperial"
@@ -579,6 +430,11 @@ local function headerH() return fontH(SMLSIZE) + sx(1) end
 -- Signal-style bars: five bars of rising height, filled from the sat count
 -- (thresholds below), track colour when empty.
 local SATS_BAR_MIN = { 4, 6, 10, 15, 20 }   -- sats needed for bar 1..5
+-- Digits inside a text box (shares of its reported height, which includes generous
+-- line spacing): baseline and digit height, measured for SMLSIZE to XXLSIZE in the
+-- TX15 and TX16S MK3 simulators (baseline 0.76 to 0.79, height 0.53 to 0.68: the
+-- smaller value keeps the bars from rising above the digits).
+local CAP_BASE, CAP_H = 0.778, 0.54
 local BAR_W, BAR_GAP = sx(3), sx(1)
 local BARS_W = #SATS_BAR_MIN * (BAR_W + BAR_GAP) - BAR_GAP
 local function satsBars(sats)
@@ -606,26 +462,16 @@ local function satsBlockW(bf)
   return textW("99", bf) + LABEL_GAP + textW("SATS", SMLSIZE) + LABEL_GAP + BARS_W
 end
 
--- DOP from the FC on the ground ("PDOP 1.3", INAV / ArduPilot "HDOP"): it
--- takes the ALT row right under the sats block and DIST stays empty (before the
--- first flight both are "--" anyway); at arming the DOP goes and ALT and DIST
--- come back. Narrower than the DIST reference, so the column never changes.
+-- DOP from the FC on the ground ("PDOP 1.3", INAV / ArduPilot "HDOP"), shown
+-- on the preflight page only.
 local function dopText(dop)
   if dop < 9.95 then return string.format("%.1f", dop) end
   return string.format("%d", math.min(99, math.floor(dop + 0.5)))
 end
--- Colour stages like the sats: below `good` green, below `fair` yellow, else
--- red. PDOP includes the vertical part and runs about 1.5 to 2 times HDOP.
-local DOP_STAGES = { HDOP = { good = 1.5, fair = 2.5 }, PDOP = { good = 2.5, fair = 4.0 } }
+-- Colour stages like the sats, from the core's DOP stage.
 local function dopColor(dop, kind)
-  local s = DOP_STAGES[kind] or DOP_STAGES.PDOP
-  if dop < s.good then return COLORS.accent end
-  if dop < s.fair then return WARN_COL end
-  return CRIT_COL
-end
-local function listRows(d)
-  if not d.dop then return LIST_ROWS end
-  return { { key = "dop", label = d.dopKind or "PDOP" }, false, LIST_ROWS[3] }
+  local s = core.dopStage(dop, kind)
+  return (s == 0 and COLORS.accent) or (s == 1 and WARN_COL) or CRIT_COL
 end
 
 -- Column width from fixed references (not the live text) so it never jumps.
@@ -642,7 +488,6 @@ end
 local function listPitch(H) return math.max(fontH(LIST_FONT), math.floor(H * 0.20)) end
 
 local function listValue(r, d)
-  if r.key == "dop"  then return dopText(d.dop) end
   if r.key == "dist" then return fmtDist(d.distanceM and d.distanceM * DIST_F) end
   if r.key == "alt"  then return d.alt  and string.format("%d",   math.floor(d.alt + 0.5)) or "--" end
   if not d.gspd then return "--" end
@@ -654,8 +499,10 @@ end
 -- Sats colour by bar stage: <= 1 bar or debounced fix loss red, 2 bars yellow,
 -- 3+ bars green (palette accent). Count and bars share it.
 local function satsColor(sats, fixLost)
-  local n = satsBars(sats or 0)
-  if fixLost or n <= 1 then return CRIT_COL end
+  if fixLost then return CRIT_COL end
+  if not sats then return COLORS.fg end   -- missing value: neutral, not 0 sats
+  local n = satsBars(sats)
+  if n <= 1 then return CRIT_COL end
   if n == 2 then return WARN_COL end
   return COLORS.accent
 end
@@ -670,20 +517,18 @@ local function drawSatsBlock(x0, y, colW, bf, d)
   local txt  = d.sats and tostring(d.sats) or "--"
   dtext(x0, y, txt, col, bf)
   dtext(x0 + textW(txt, bf) + LABEL_GAP, base - smlH, "SATS", COLORS.muted, SMLSIZE)
-  drawSatsBars(x0 + colW - BARS_W, base - smlH, smlH - sx(2), d.sats, col)
+  -- bars at most as tall as the digits of the count (top of the digits to their baseline)
+  local bh = fontH(bf)
+  local digBase, digH = math.floor(bh * CAP_BASE + 0.5), math.floor(bh * CAP_H + 0.5)
+  drawSatsBars(x0 + colW - BARS_W, y + digBase - digH, digH, d.sats, col)
   return satsBlockH(bf)
 end
 
--- One list row: label left, value (+ unit) right-aligned; false = empty slot.
+-- One list row: label left, value (+ unit) right-aligned.
 local function drawRow(x0, y, colW, r, d)
-  if not r then return end
   local v = listValue(r, d)
   dtext(x0, y, r.label, COLORS.muted, LIST_FONT)
-  if r.key == "dop" then
-    dtext(x0 + colW - textW(v, LIST_FONT), y, v, dopColor(d.dop, d.dopKind), LIST_FONT)
-  else
-    drawValueUnit(x0 + colW - valueUnitW(v, r.unit, LIST_FONT), y, v, r.unit, COLORS.fg, LIST_FONT)
-  end
+  drawValueUnit(x0 + colW - valueUnitW(v, r.unit, LIST_FONT), y, v, r.unit, COLORS.fg, LIST_FONT)
 end
 
 -- Rows sit in equal bands stacked up from the bottom edge (`bottom` = tile
@@ -748,7 +593,7 @@ local function drawRingStatus(x0, top, W, boxH, d, rCap, small, txt, short, col,
   -- above it the ring when it has room, else only the house (AT HOME).
   if R >= sx(12) then
     local rcy = top + math.floor(areaH / 2)
-    drawCompass(cx, rcy, R, NORTH_UP and 0 or -(d.course or 0), nil, compact)
+    compass.ring(cx, rcy, R, NORTH_UP and 0 or -(d.course or 0), nil, compact, NORTH_UP, compassColors())
     if house then drawHouse(cx, rcy, math.floor(R * 0.55), COLORS.fg) end
   else
     if textW(txt, SMLSIZE) > W then txt = short end
@@ -759,44 +604,31 @@ local function drawRingStatus(x0, top, W, boxH, d, rCap, small, txt, short, col,
 end
 
 -- FC status that replaces the "HOME <rel>" line: long text, short form, colour.
-local ALERTS = {
-  RTH  = { "RETURN TO HOME", "RTH",  WARN_COL },
-  FS   = { "FAILSAFE",       "FS",   CRIT_COL },
-  LAND = { "LANDING",        "LAND", WARN_COL },
-}
+-- Colour of a label from the shared compass (colour key).
+local function labelCol(k)
+  return (k == "warn" and WARN_COL) or (k == "crit" and CRIT_COL) or (k == "muted" and COLORS.muted) or COLORS.fg
+end
 
 local function drawDirection(x0, top, W, boxH, d, rCap, small)
   local cx = x0 + math.floor(W / 2)
   local cy = top + math.floor(boxH / 2)
-  if d.status == "READY" then
-    if d.noHome then
-      drawRingStatus(x0, top, W, boxH, d, rCap, small, "NO HOME", "NO HOME", CRIT_COL)
-    else
-      drawRingStatus(x0, top, W, boxH, d, rCap, small, "READY TO FLY", "READY", COLORS.muted)
-    end
-    return
-  end
-  local alert = ALERTS[d.alert]
-  if d.atHome then
-    local s = alert or { "AT HOME", "AT HOME", COLORS.muted }
-    drawRingStatus(x0, top, W, boxH, d, rCap, small, s[1], s[2], s[3], true)
+  -- What to show and the text under it come from the shared compass:
+  -- READY / NO HOME ring, AT HOME house, or the arrow.
+  local kind, lb = compass.label({ gpsState = d.gpsState, noHome = d.noHome, atHome = d.atHome, alert = d.alert,
+                                   courseValid = d.courseValid, rel = d.rel, sector = d.sector, bearing = d.bearingToHome },
+                                 { ahead = core.PARAMS.AHEAD_DEG, behind = core.PARAMS.BEHIND_DEG })
+  if kind ~= "arrow" then
+    drawRingStatus(x0, top, W, boxH, d, rCap, small, lb.text, lb.short, labelCol(lb.col), kind == "house")
     return
   end
   do
-    -- Label under / beside the ring: the steering hint ("30 R") with a valid
-    -- course, else the absolute bearing to home ("SW 220\194\176"). `ref` is the
-    -- widest value of each kind, so the slot never shifts with the number.
-    -- An FC alert (rescue / failsafe) takes the slot, without the HOME caption.
-    local lbl, ref
-    local cap, lblCol = "HOME", COLORS.fg
-    if alert then
-      lbl = (not small and textW(alert[1], SMLSIZE) <= W) and alert[1] or alert[2]
-      ref, cap, lblCol = lbl, nil, alert[3]
-    elseif d.courseValid and d.rel then
-      lbl, ref = relLabel(d.rel), "180 R"
-    else
-      lbl = string.format("%s %d\194\176", d.sector or "?", math.floor((d.bearingToHome or 0) + 0.5))
-      ref = "NW 360\194\176"
+    -- Label under / beside the ring: "HOME" with the steering hint or the
+    -- absolute bearing; an FC alert takes the slot without the caption, its
+    -- short form when the long one does not fit. `ref` keeps the slot steady.
+    local lbl, ref, cap, lblCol = lb.text, lb.ref, lb.cap, labelCol(lb.col)
+    if not cap then
+      lbl = (not small and textW(lb.text, SMLSIZE) <= W) and lb.text or lb.short
+      ref = lbl
     end
     local smlH = fontH(SMLSIZE)
     -- Compass ring + arrow inside (55 % of the ring), degree label at the box
@@ -895,7 +727,7 @@ local function drawActiveFull(W, H, x0, y0, d)
   local Hl   = H - headerH()
   local colW = listColW(MIDSIZE)
   drawSatsBlock(x0, top, colW, MIDSIZE, d)
-  drawList(x0, y0 + H, colW, listRows(d), listPitch(Hl), d)
+  drawList(x0, y0 + H, colW, LIST_ROWS, listPitch(Hl), d)
   local bx = x0 + colW + GAP
   drawDirection(bx, top, x0 + W - bx, Hl, d, sx(60), false)
 end
@@ -917,7 +749,7 @@ local function drawActiveMedium(W, H, x0, y0, d)
   local bf   = fitFont("99", math.floor(W * 0.5), math.floor((rowY(3) - sx(2) - top) * 0.5), MIDSIZE)
   local colW = listColW(bf)
   drawSatsBlock(x0, top, colW, bf, d)
-  for i, r in ipairs(listRows(d)) do drawRow(x0, rowY(i + 1), colW, r, d) end
+  for i, r in ipairs(LIST_ROWS) do drawRow(x0, rowY(i + 1), colW, r, d) end
   local bx = x0 + colW + GAP
   drawDirection(bx, top, x0 + W - bx, y0 + H - top, d, sx(60), false)
 end
@@ -940,7 +772,7 @@ local function drawActive(W, H, x0, y0, d)
     local nRows = math.floor((H + sx(1)) / (smlH + sx(1)))
     local hdr   = (nRows >= 2) and (smlH + sx(1)) or 0
     local altH  = (nRows >= 3) and (smlH + sx(1)) or 0
-    local altR  = listRows(d)[1]   -- ALT, on the ground the DOP (narrower: width from ALT)
+    local altR  = LIST_ROWS[1]
     local altW  = (altH > 0) and (textW(LIST_ROWS[1].label, SMLSIZE) + LABEL_GAP
                   + valueUnitW(LIST_ROWS[1].ref, LIST_ROWS[1].unit, LIST_FONT)) or 0
     local bfS   = fitFont("99", math.floor(W * 0.5), H - hdr - altH, MIDSIZE)
@@ -965,30 +797,186 @@ local function drawActive(W, H, x0, y0, d)
   end
 end
 
--- Angle smoothing (display only): each frame moves the drawn angle towards the
--- target by half the remaining way, capped at SMOOTH_MAX_STEP degrees, along the
--- shorter direction, so GPS jitter softens and a real turn follows within a few
--- frames. nil target (no course) forgets the value, the next one snaps.
--- The result is always -180..180 (rel's range, which relLabel relies on).
-local SMOOTH_MAX_STEP = 40
-local function smoothAngle(prev, target)
-  if target == nil then return nil end
-  if prev == nil then return target end
-  local diff = ((target - prev + 540) % 360) - 180
-  if math.abs(diff) < 0.5 then return target end
-  local step = diff * 0.5
-  if step >  SMOOTH_MAX_STEP then step =  SMOOTH_MAX_STEP end
-  if step < -SMOOTH_MAX_STEP then step = -SMOOTH_MAX_STEP end
-  return ((prev + step + 180) % 360) - 180
+-- ---------------------------------------------------------------------------
+-- Preflight and end pages (flight phases PRE and ENDED): header and margins as
+-- on the live tile, rows evenly spread below the header.
+-- ---------------------------------------------------------------------------
+
+-- Colour of a check level: 0 accent, 1 yellow, 2 red.
+local function levelColor(level)
+  if level == 2 then return CRIT_COL end
+  if level == 1 then return WARN_COL end
+  return COLORS.accent
+end
+
+-- Seconds left on a page timer that started at `since` (the core's ms clock,
+-- getTime() * 10) and runs `total` ms.
+local function secsLeft(since, total)
+  return math.max(0, math.ceil((total - (getTime() * 10 - since)) / 1000))
+end
+
+-- Countdown at the bottom right: text left of a bar that runs empty. The text
+-- shrinks to the seconds when the row is too narrow.
+local function drawCountdown(x0, W, y, secs, total, label)
+  local smlH = fontH(SMLSIZE)
+  local barH = math.max(3, sx(6))
+  local barW = math.max(sx(30), math.floor(W * 0.35))
+  local bx   = x0 + W - barW
+  local by   = y + math.floor((smlH - barH) / 2)
+  lcd.drawFilledRectangle(bx, by, barW, barH, COLORS.track)
+  local fw = math.floor(barW * math.max(0, math.min(1, secs / total)))
+  if fw > 0 then lcd.drawFilledRectangle(bx, by, fw, barH, COLORS.muted) end
+  local txt = string.format("%s in %d s", label, secs)
+  if textW(txt, SMLSIZE) > bx - sx(6) - x0 then txt = string.format("%d s", secs) end
+  dtext(bx - sx(6) - textW(txt, SMLSIZE), y, txt, COLORS.muted, SMLSIZE)
+end
+
+-- Status line: dot plus text in the level colour (GPS READY / FIX SETTLING / NO FIX).
+local function drawStatusLine(x, y, st)
+  local smlH = fontH(SMLSIZE)
+  local r    = math.max(2, sx(4))
+  local col  = levelColor(st.level)
+  lcd.drawFilledCircle(x + r, y + math.floor(smlH / 2), r, col)
+  dtext(x + 2 * r + sx(4), y, st.text, col, SMLSIZE)
+  return 2 * r + sx(4) + textW(st.text, SMLSIZE)
+end
+
+-- Rows evenly spread below the header like MEDIUM (header = row 0, n rows, the
+-- last at the bottom pad); the pitch never drops below a compressed line.
+local function rowSpread(H, y0, n)
+  local smlH    = fontH(SMLSIZE)
+  local span    = H - smlH
+  local minSpan = n * (smlH - sx(4))
+  if span < minSpan then span = minSpan end
+  return function(i) return y0 + math.floor(i * span / n + 0.5) end
+end
+
+-- Muted label followed by its value.
+local function drawKV(x, y, label, value, col)
+  dtext(x, y, label, COLORS.muted, SMLSIZE)
+  dtext(x + textW(label, SMLSIZE), y, value, col or COLORS.fg, SMLSIZE)
+end
+
+-- Preflight page: satellites big (font box sized for "0.00V") with SATS and the bars as on the live view, then DOP and fix
+-- type, the GPS status and the countdown to the flight page while the check
+-- is met. Status and countdown rows are fixed, the countdown row stays empty
+-- while it does not run, so nothing moves. Smaller zones keep sats, DOP/fix,
+-- status and countdown as far as they fit (two rows: sats and status), the
+-- shortest only the sats.
+local function drawPre(W, H, x0, y0, r, state)
+  local smlH   = fontH(SMLSIZE)
+  local col    = satsColor(r.sats, r.fixLost)
+  local satTxt = r.sats and tostring(r.sats) or "--"
+  local st     = core.preflight(core.fixState(r), r.dop, r.dopKind)
+  local secs   = state.readySince and secsLeft(state.readySince, core.PRE_HOLD_T)
+  -- rows below the header at the compressed pitch
+  local nRows  = math.floor((H - smlH) / (smlH - sx(4)))
+  if nRows < 1 then
+    local f = fitFont(satTxt .. " SATS", W, H)
+    dtext(x0, y0 + math.floor((H - fontH(f)) / 2), satTxt .. " SATS", col, f)
+    return
+  end
+  drawHeader(x0, y0)
+  local bottomY = y0 + H - smlH
+  local half    = math.floor(W / 2)
+  local function countdown(y)
+    if secs then drawCountdown(x0, W, y, secs, core.PRE_HOLD_T / 1000, "Flight page") end
+  end
+  local function infoRow(y)
+    drawKV(x0, y, (r.dopKind or "PDOP") .. " ", r.dop and dopText(r.dop) or "--",
+           r.dop and dopColor(r.dop, r.dopKind))
+    drawKV(x0 + half, y, "FIX ", r.fix or "--")
+  end
+
+  if not activeFitsFull(W, H) then
+    local k    = (activeFitsMedium(W, H) and nRows >= 4) and 4 or math.min(3, nRows)
+    local rowY = rowSpread(H, y0, k)
+    local top  = rowY(1)
+    local bf   = fitFont("99", math.floor(W * 0.5), (k >= 2 and rowY(2) or y0 + H) - sx(2) - top, MIDSIZE)
+    drawSatsBlock(x0, top, math.min(W, satsBlockW(bf)), bf, r)   -- bars right behind SATS
+    if k == 4 then
+      infoRow(rowY(2))
+      drawStatusLine(x0, rowY(3), st)
+      countdown(rowY(4))
+    else
+      -- no row of its own: the countdown joins the status line, the info row keeps its place
+      if k >= 3 then infoRow(rowY(2)) end
+      if k >= 2 then
+        local cx = x0 + drawStatusLine(x0, rowY(k), st) + sx(8)
+        if secs then drawCountdown(cx, x0 + W - cx, rowY(k), secs, core.PRE_HOLD_T / 1000, "Flight page") end
+      end
+    end
+    return
+  end
+
+  -- FULL: the spare height is shared out evenly between the blocks.
+  local top  = y0 + headerH()
+  local bigF = fitFont("0.00V", math.floor(W * 0.5), math.floor((bottomY - top) * 0.4))
+  local bigH = fontH(bigF)
+  drawSatsBlock(x0, top, math.min(W, listColW(bigF)), bigF, r)   -- as on the live view, bigger count
+  local fixed = bigH + 2 * smlH
+  local gap   = math.max(0, math.floor((bottomY - top - fixed) / 3))
+  local infoY = top + bigH + gap
+  infoRow(infoY)
+  drawStatusLine(x0, infoY + smlH + gap, st)
+  countdown(bottomY)
+end
+
+-- End page: the flight's highest distance, altitude and speed and the landing
+-- position, and the countdown to the wait page. On short zones the position
+-- stays longest (it finds the model), the maxima go first; the shortest show
+-- only the position (on two lines when one is too narrow).
+local function drawEnded(W, H, x0, y0, r, state)
+  local smlH = fontH(SMLSIZE)
+  local function num(v, f) return v and (string.format("%d", math.floor(v * (f or 1) + 0.5))) or "--" end
+  local du   = LIST_ROWS[2].unit
+  local pos  = (r.lastLat and r.lastLon) and (coord(r.lastLat) .. ", " .. coord(r.lastLon)) or "--"
+  local rows = {                          -- { order on screen, label, value, short label }
+    { 4, "LAST POSITION", pos, "LAST POS" },
+    { 1, "MAX DISTANCE", num(r.maxDistM, DIST_F) .. " " .. du, "MAX DIST" },
+    { 2, "MAX ALTITUDE", num(r.maxAlt) .. " " .. LIST_ROWS[1].unit, "MAX ALT" },
+    { 3, "MAX SPEED", num(r.maxGspd) .. " " .. LIST_ROWS[3].unit, "MAX SPD" },
+  }
+  local n = math.floor((H - smlH) / (smlH - sx(4)))   -- compressed lines below the header
+  if n < 2 then
+    if textW(pos, SMLSIZE) <= W or not r.lastLat then
+      dtext(x0, y0 + math.floor((H - smlH) / 2), pos, COLORS.fg, SMLSIZE)
+    else
+      dtext(x0, y0, coord(r.lastLat), COLORS.fg, SMLSIZE)
+      if H >= 2 * smlH - sx(4) then dtext(x0, y0 + smlH - sx(2), coord(r.lastLon), COLORS.fg, SMLSIZE) end
+    end
+    return
+  end
+  local k = math.min(#rows, n - 1)
+  local keep = {}
+  for i = 1, k do keep[i] = rows[i] end
+  table.sort(keep, function(a, b) return a[1] < b[1] end)
+  drawHeader(x0, y0)
+  local rowY = rowSpread(H, y0, k + 1)
+  for i, row in ipairs(keep) do
+    local vw  = textW(row[3], SMLSIZE)
+    local lbl = row[2]
+    if textW(lbl, SMLSIZE) + sx(6) + vw > W then lbl = row[4] end   -- short label when the long one does not fit
+    if textW(lbl, SMLSIZE) + sx(6) + vw <= W then                   -- a narrow zone keeps the value only
+      dtext(x0, rowY(i), lbl, COLORS.muted, SMLSIZE)
+    end
+    dtext(x0 + W - vw, rowY(i), row[3], COLORS.fg, SMLSIZE)
+  end
+  drawCountdown(x0, W, rowY(k + 1), secsLeft(state.endedAt or 0, core.ENDED_HOLD_T),
+                core.ENDED_HOLD_T / 1000, "Wait page")
 end
 
 -- ---------------------------------------------------------------------------
--- Tile dispatch: map core's status to a screen (display derivation, Spec 3.1).
+-- Tile dispatch: map the core's phase and GPS state to a screen (display
+-- derivation, Spec 3.1). PRE: preflight page; FLIGHT: by the GPS state.
 -- Stable errors win over volatile states (Spec 4.1 priority).
 -- ---------------------------------------------------------------------------
 local function drawTile(ctx, z, x0, y0, W, H)
   if not core then
     drawStatusTile(z, "Core missing", "Reinstall GPS Homer", true); return
+  end
+  if not compass then   -- the core names it in the settings tool
+    drawStatusTile(z, "Configuration error", "Please check Tool Flight Bag", true); return
   end
   if ctx.fatalError then
     drawStatusTile(z, "Widget error", "Restart radio", true); return
@@ -1001,39 +989,38 @@ local function drawTile(ctx, z, x0, y0, W, H)
   -- Sensor existence comes from getFieldInfo and never flickers on a missed
   -- frame, so it wins over the volatile link state (no waiting tile flashing
   -- over a real setup error).
-  if r.snapshot and r.snapshot.sensorMissing then
-    drawStatusTile(z, "No GPS sensor", "Check FC config", true); return
+  if core.configDamaged or (r.snapshot and r.snapshot.sensorMissing) then
+    drawStatusTile(z, "Configuration error", "Please check Tool Flight Bag", true); return
   end
 
-  local st     = r.status
+  local ph, gs = r.phase, r.gpsState
   local linkUp = r.snapshot and r.snapshot.telem   -- heartbeat only while packets arrive
-  if st == "ACTIVE" or st == "READY" then
+  if ph == "ENDED" then
+    drawEnded(W, H, x0, y0, r, ctx.state)
+  elseif ph == "PRE" then
+    drawPre(W, H, x0, y0, r, ctx.state)
+    if linkUp then drawHeartbeat(ctx) end
+  elseif ph ~= "FLIGHT" then -- WAITING
+    drawSplashTile(z, "Waiting for telemetry")
+  elseif gs == "HOME" or gs == "READY" then
     -- READY = the same live view before home is set: no arrow/H, DIST "--",
     -- a status line instead of "HOME <rel>".
     ctx.smooth = ctx.smooth or {}
-    ctx.smooth.rel    = smoothAngle(ctx.smooth.rel,    r.rel)
-    ctx.smooth.course = smoothAngle(ctx.smooth.course, r.course)
+    ctx.smooth.rel    = compass.smooth(ctx.smooth.rel,    r.rel)
+    ctx.smooth.course = compass.smooth(ctx.smooth.course, r.course)
     local d = {
-      status = st, rel = ctx.smooth.rel, bearingToHome = r.bearingToHome, sector = r.sector,
+      gpsState = gs, rel = ctx.smooth.rel, bearingToHome = r.bearingToHome, sector = r.sector,
       courseValid = r.courseValid, course = ctx.smooth.course, distanceM = r.distanceM, sats = r.sats,
       alt = r.alt, gspd = r.gspd, fixLost = r.fixLost, noHome = r.noHome, atHome = r.atHome,
-      alert = r.alert, dop = r.dop, dopKind = r.dopKind,
+      alert = r.alert,
     }
     drawActive(W, H, x0, y0, d)
     if linkUp then drawHeartbeat(ctx) end
-  elseif st == "ACQUIRING" then
+  else -- ACQUIRING
     -- "4 Sats (min 6)": found so far, and the count home needs.
     drawSplashTile(z, "Searching satellites",
                    string.format("%d Sats (min %d)", r.sats or 0, core.PARAMS.HOME_MIN_SATS))
     if linkUp then drawHeartbeat(ctx) end
-  elseif st == "ENDED" then
-    if r.lastLat and r.lastLon then
-      drawStatusTile(z, "Flight ended", dms(r.lastLat, "N", "S"), false, dms(r.lastLon, "E", "W"))
-    else
-      drawStatusTile(z, "Flight ended", "--", false)
-    end
-  else -- NO_TELEM
-    drawSplashTile(z, "Waiting for telemetry")
   end
 end
 
@@ -1059,12 +1046,28 @@ end
 -- One throttled, fault-tolerant data cycle (no lcd.*). background() only runs
 -- off-screen, so refresh() must drive it too or the tile freezes. A repeated
 -- failure streak trips the terminal error tile.
+-- This widget's own copy of the incoming CRSF frames, drained once per tick and
+-- handed to the core (DOP replies); the core decides what it takes.
+local MAX_POPS_PER_TICK = 20
+
+local function pollFrames(ctx)
+  if not crossfireTelemetryPop then return end   -- no CRSF on this radio
+  for _ = 1, MAX_POPS_PER_TICK do
+    local cmd, data = crossfireTelemetryPop()
+    if cmd == nil then break end
+    core.handleFrame(ctx.state, cmd, data)
+  end
+end
+
 local function tick(ctx)
   if not core or ctx.fatalError then return end
   local now = getTime()
   if ctx.lastTick ~= 0 and (now - ctx.lastTick) < TICK_INTERVAL then return end
   ctx.lastTick = now
-  local ok, res = pcall(core.update, ctx.state)
+  local ok, res = pcall(function()
+    pollFrames(ctx)
+    return core.update(ctx.state)
+  end)
   if ok then
     ctx.result      = res
     ctx.errorStreak = 0

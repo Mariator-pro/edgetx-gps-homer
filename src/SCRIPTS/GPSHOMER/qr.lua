@@ -5,11 +5,13 @@
 --
 -- One symbol shape only: version 3 (29x29), ECC level L, byte mode, single
 -- block, fixed data mask 2. That holds 53 bytes, enough for a map URL with
--- six decimals. Loaded on demand by the tool; the widget never needs it.
+-- six decimals. Loaded on demand; the widget never needs it.
 --
 -- XOR runs off a nibble table (plain arithmetic, no bitwise operators needed).
--- A full encode is a few thousand operations in one call -- fine for a tool
--- screen built once, too slow to repeat per frame (the caller caches it).
+-- A full encode is about 120,000 Lua instructions -- fine for a tool screen
+-- built once, too slow to repeat per frame (the caller caches it). Widgets may
+-- run only 20,000 per call: they use newJob/step, which spread the tables and
+-- the encoding over many calls of a few thousand instructions each.
 -- =====================================================================
 -- SPDX-License-Identifier: GPL-2.0-only
 -- Copyright (C) 2026 Mariator-pro
@@ -41,17 +43,19 @@ local floor = math.floor
 -- XOR without bit operators
 -- ---------------------------------------------------------------------------
 
+-- The tables are built on first use (see INIT below), not at load.
 local XOR4 = {}
-for a = 0, 15 do
-  XOR4[a] = {}
+local function xorRow(a)
+  local row = {}
   for b = 0, 15 do
     local r = 0
     for i = 0, 3 do
       local p = 2 ^ i
       if (floor(a / p) % 2) ~= (floor(b / p) % 2) then r = r + p end
     end
-    XOR4[a][b] = r
+    row[b] = r
   end
+  XOR4[a] = row
 end
 
 -- Bytes: two nibble lookups. The hot path in Reed-Solomon.
@@ -72,17 +76,19 @@ local function xorN(a, b)
 end
 
 -- ---------------------------------------------------------------------------
--- GF(256) tables and the generator polynomial, built once at load
+-- GF(256) tables and the generator polynomial, built once on first use
 -- ---------------------------------------------------------------------------
 
 local EXP, LOG = {}, {}
-do
-  local x = 1
-  for i = 0, 254 do
-    EXP[i] = x
-    LOG[x] = i
-    x = x * 2
-    if x > 255 then x = xorN(x, 285) end   -- 0x11D
+local gfX
+-- Powers from..to; from = 0 starts over.
+local function buildGF(from, to)
+  if from == 0 then gfX = 1 end
+  for i = from, to do
+    EXP[i] = gfX
+    LOG[gfX] = i
+    gfX = gfX * 2
+    if gfX > 255 then gfX = xorN(gfX, 285) end   -- 0x11D
   end
 end
 
@@ -92,16 +98,29 @@ local function gmul(a, b)
 end
 
 -- Product of (x - a^i) for i = 0..ECC_CW-1, coefficients highest power first.
-local GEN = { 1 }
-for i = 0, ECC_CW - 1 do
-  GEN[#GEN + 1] = 0
-  local prev = 0
-  for j = 1, #GEN do
-    local cur = GEN[j]
-    GEN[j] = xorByte(cur, gmul(prev, EXP[i]))
-    prev = cur
+local GEN
+local function buildGen()
+  GEN = { 1 }
+  for i = 0, ECC_CW - 1 do
+    GEN[#GEN + 1] = 0
+    local prev = 0
+    for j = 1, #GEN do
+      local cur = GEN[j]
+      GEN[j] = xorByte(cur, gmul(prev, EXP[i]))
+      prev = cur
+    end
   end
 end
+
+-- Table build in slices (four XOR rows each, GF in halves, then the generator).
+local tablesReady = false
+local INIT = {}
+for a0 = 0, 15, 4 do
+  INIT[#INIT + 1] = function() for a = a0, a0 + 3 do xorRow(a) end end
+end
+INIT[#INIT + 1] = function() buildGF(0, 127) end
+INIT[#INIT + 1] = function() buildGF(128, 254) end
+INIT[#INIT + 1] = function() buildGen(); tablesReady = true end
 
 -- ---------------------------------------------------------------------------
 -- Data codewords
@@ -136,11 +155,10 @@ local function dataCodewords(text)
   return cw
 end
 
--- Reed-Solomon remainder of the data codewords over GEN.
-local function eccCodewords(data)
-  local rem = {}
-  for i = 1, ECC_CW do rem[i] = 0 end
-  for i = 1, DATA_CW do
+-- Reed-Solomon remainder of the data codewords over GEN, for data codewords
+-- from..to (rem starts as ECC_CW zeros).
+local function eccSlice(data, rem, from, to)
+  for i = from, to do
     local factor = xorByte(data[i], rem[1])
     table.remove(rem, 1)
     rem[ECC_CW] = 0
@@ -148,7 +166,6 @@ local function eccCodewords(data)
       rem[j] = xorByte(rem[j], gmul(GEN[j + 1], factor))
     end
   end
-  return rem
 end
 
 -- ---------------------------------------------------------------------------
@@ -183,11 +200,14 @@ local function finder(m, fn, r0, c0)
   end
 end
 
-local function functionPatterns(m, fn)
+local function finders(m, fn)
   finder(m, fn, 0, 0)
   finder(m, fn, 0, SIZE - 7)
   finder(m, fn, SIZE - 7, 0)
+end
 
+-- Timing lines, alignment pattern and dark module.
+local function otherPatterns(m, fn)
   for i = 8, SIZE - 9 do                       -- timing lines
     local dark = (i % 2 == 0) and 1 or 0
     setFn(m, fn, 6, i, dark)
@@ -241,11 +261,13 @@ end
 -- Zigzag placement, two columns at a time from the bottom right, skipping the
 -- vertical timing line. The mask is applied here: it covers every non-function
 -- module, and the zigzag visits exactly those (cells past the last bit stay 0
--- and are masked all the same).
-local function placeData(m, fn, cw)
-  local bit, total = 0, #cw * 8
-  local col = SIZE - 1
-  while col > 0 do
+-- and are masked all the same). st = { col, bit } carries on over calls; pairs
+-- limits the column pairs per call. Returns true when done.
+local function placeData(m, fn, cw, st, pairs)
+  local bit, total = st.bit, #cw * 8
+  local col = st.col
+  while col > 0 and pairs > 0 do
+    pairs = pairs - 1
     if col == 6 then col = 5 end
     for vert = 0, SIZE - 1 do
       for j = 0, 1 do
@@ -266,34 +288,82 @@ local function placeData(m, fn, cw)
     end
     col = col - 2
   end
+  st.col, st.bit = col, bit
+  return col <= 0
 end
 
 -- ---------------------------------------------------------------------------
 -- Public API
 -- ---------------------------------------------------------------------------
 
--- Returns { size, rows } with one "0"/"1" string per row (1-based), or nil and
--- a reason when the text does not fit.
-function M.encode(text)
+local ECC_SLICE   = 10   -- data codewords per step
+local PLACE_PAIRS = 2    -- column pairs per step
+
+-- Encoder job for step(), or nil and a reason when the text does not fit.
+function M.newJob(text)
   if type(text) ~= "string" or #text == 0 then return nil, "empty" end
   if #text > M.CAPACITY then return nil, "too long" end
+  return { text = text, phase = "init", init = 1 }
+end
 
-  local data = dataCodewords(text)
-  local ecc  = eccCodewords(data)
-  for i = 1, ECC_CW do data[DATA_CW + i] = ecc[i] end
-
-  local m, fn = newMatrix()
-  functionPatterns(m, fn)
-  placeFormat(m, fn)
-  placeData(m, fn, data)
-
-  local rows = {}
-  for r = 0, SIZE - 1 do
-    local cells = {}
-    for c = 0, SIZE - 1 do cells[c + 1] = m[r][c] end
-    rows[r + 1] = table.concat(cells)
+-- One slice of work (at most about 8,000 Lua instructions, so a widget keeps
+-- most of its 20,000 per call for drawing). Returns the code
+-- { size, rows } once finished, nil before.
+function M.step(job)
+  local p = job.phase
+  if p == "init" then
+    if tablesReady then
+      job.phase = "data"
+    else
+      INIT[job.init]()
+      job.init = job.init + 1
+    end
+  elseif p == "data" then
+    job.data = dataCodewords(job.text)
+    job.rem = {}
+    for i = 1, ECC_CW do job.rem[i] = 0 end
+    job.next, job.phase = 1, "ecc"
+  elseif p == "ecc" then
+    local to = math.min(job.next + ECC_SLICE - 1, DATA_CW)
+    eccSlice(job.data, job.rem, job.next, to)
+    job.next = to + 1
+    if job.next > DATA_CW then
+      for i = 1, ECC_CW do job.data[DATA_CW + i] = job.rem[i] end
+      job.phase = "matrix"
+    end
+  elseif p == "matrix" then
+    job.m, job.fn = newMatrix()
+    job.phase = "patterns"
+  elseif p == "patterns" then
+    finders(job.m, job.fn)
+    job.phase = "format"
+  elseif p == "format" then
+    otherPatterns(job.m, job.fn)
+    placeFormat(job.m, job.fn)
+    job.place, job.phase = { col = SIZE - 1, bit = 0 }, "place"
+  elseif p == "place" then
+    if placeData(job.m, job.fn, job.data, job.place, PLACE_PAIRS) then job.phase = "rows" end
+  elseif p == "rows" then
+    local rows = {}
+    for r = 0, SIZE - 1 do
+      local cells = {}
+      for c = 0, SIZE - 1 do cells[c + 1] = job.m[r][c] end
+      rows[r + 1] = table.concat(cells)
+    end
+    job.code, job.phase = { size = SIZE, rows = rows }, "done"
+    job.data, job.rem, job.m, job.fn, job.place = nil, nil, nil, nil, nil
   end
-  return { size = SIZE, rows = rows }
+  return job.code
+end
+
+-- Whole encode in one call. Returns { size, rows } with one "0"/"1" string per
+-- row (1-based), or nil and a reason when the text does not fit.
+function M.encode(text)
+  local job, why = M.newJob(text)
+  if not job then return nil, why end
+  local code
+  repeat code = M.step(job) until code
+  return code
 end
 
 -- Dark runs per row as { row, firstCol, length } with 1-based coordinates.

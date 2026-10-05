@@ -13,8 +13,10 @@ This page shows which GPS Homer features work with which flight controller firmw
 | RETURN TO HOME / FAILSAFE / LANDING line | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ⚙️&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> |
 | Voice announcements | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ⚙️&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> |
 | Last position (flight log) | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ⚙️&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> |
+| Altitude above home, Max altitude warning | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ⚙️&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> |
 | GPS accuracy (DOP) on the ground | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ⚙️&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> |
 
+- **Altitude:** all three send it in the GPS frame (Betaflight and ArduPilot the GPS altitude, INAV its estimated altitude); the widget shows it relative to home. Without an altitude there is no Max altitude warning.
 - **GPS accuracy:** the widget asks Betaflight and INAV over MSP; Betaflight answers with PDOP, INAV with HDOP. ArduPilot does not answer MSP, but sends the HDOP on its own in its passthrough telemetry: always in ExpressLRS MAVLink mode, over CRSF only with `RC_OPTIONS` option "CRSF custom telemetry" (see Setup).
 
 ## RC link
@@ -28,11 +30,12 @@ This page shows which GPS Homer features work with which flight controller firmw
 | RETURN TO HOME / FAILSAFE / LANDING line | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
 | Voice announcements | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
 | Last position (flight log) | ✅&nbsp;<img src="https://img.shields.io/badge/-tested-brightgreen" alt="tested" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
+| Altitude above home, Max altitude warning | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
 | GPS accuracy (DOP) on the ground | ✅&nbsp;<img src="https://img.shields.io/badge/-source-blue" alt="source" height="20"> | ✅&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> | ❌&nbsp;<img src="https://img.shields.io/badge/-closed%20fw-blue" alt="closed fw" height="20"> |
 
 - **ImmersionRC Ghost:** EdgeTX decodes the GPS course 1000 times too small (reported as [EdgeTX #7841](https://github.com/EdgeTX/edgetx/issues/7841)), so the arrow points the wrong way. Betaflight sends no flight mode over Ghost, so home is set at the first stable fix instead of on arming, and there is no status line. Checked with Betaflight only; INAV and ArduPilot over Ghost were not checked.
 - **GPS accuracy over Ghost:** the widget sends its MSP request over CRSF only, so it is not available with Ghost.
-- **FrSky ACCESS:** no flight controller sends the satellite count as its own sensor, so GPS Homer always shows "No GPS sensor".
+- **FrSky ACCESS:** no flight controller sends the satellite count as its own sensor, so GPS Homer always shows "Configuration error" (Flight Bag names the missing `Sats` sensor).
 
 ## Legend
 
@@ -58,7 +61,7 @@ What has to be set so the features work.
 |---|---|---|
 | **Betaflight** | GPS enabled and GPS telemetry not disabled. | Nothing to change. |
 | **INAV** | `feature GPS`, `feature TELEMETRY` (off by default on some boards) and the receiver set up as CRSF (`serialrx_provider = CRSF`). | Nothing to change. |
-| **ArduPilot** | Receiver on a serial port with `SERIALx_PROTOCOL = 23` (RCIN), which RC control over CRSF needs anyway. `RC_OPTIONS` option "CRSF flight mode disarm star" (without it `FM` has no disarmed marker, so home is never set; not needed in MAVLink mode). | Nothing to change. |
+| **ArduPilot** | Receiver on a serial port with `SERIALx_PROTOCOL = 23` (RCIN), which RC control over CRSF needs anyway. `RC_OPTIONS` option "CRSF flight mode disarm star" (recommended: without it `FM` has no disarmed marker, so home is set at the first stable GPS fix instead of on arming; not needed in MAVLink mode). | Nothing to change. |
 
 If the receiver runs in MAVLink mode instead of CRSF, the ExpressLRS TX module builds the telemetry from ArduPilot's MAVLink messages. Copter then sends no GPS data by default: set the extended status stream rate `MAVn_EXT_STAT` of the MAVLink channel the receiver is on to at least 1 Hz (parameter name as of ArduPilot master, September 2026).
 

@@ -8,7 +8,7 @@
 -- always be installed alongside them:
 --   * the telemetry widget  /WIDGETS/GPSHOMER/main.lua      (display only)
 --   * the function script    /SCRIPTS/FUNCTIONS/gpshom.lua  (voice events only)
---   * the tools script       /SCRIPTS/TOOLS/GPSHOMER.lua    (configuration)
+--   * the settings tool      /SCRIPTS/TOOLS/FLIGHTBAG.lua  (configuration)
 --
 -- "core does everything except drawing": the hardware glue (getValue / playFile
 -- / getTime) lives here exactly once; there are NO lcd.* calls and NO
@@ -29,6 +29,15 @@
 -- =====================================================================
 
 local M = {}
+-- Single source of the version: the settings tool reads VERSION, API and
+-- CONFIG_PATH as text from the head of this file (keep them near the top).
+M.VERSION = "1.0.0"
+M.API     = { 1, 0 }
+M.CONFIG_PATH = "/SCRIPTS/GPSHOMER/config.lua"
+-- API is the interface version for scripts that load this core: { breaking, additive }.
+-- Adding an exported function or field bumps the second number; changing or
+-- removing one bumps the first and resets the second. Fixes and internal
+-- changes leave it alone. A loader accepts the same first and at least its second.
 
 -- ---------------------------------------------------------------------------
 -- Declarations (single source of truth)
@@ -50,34 +59,38 @@ M.SENSORS = {
 -- per event the config may hold a file name or `false` (that event muted).
 -- Absolute path bypasses EdgeTX's per-language resolution so the pilot's own
 -- voice plays regardless of locale.
-M.VERSION   = "1.0.0"
 
 -- Simulator switch: true replaces all telemetry reads with the scripted flight
 -- in sim.lua (Companion cannot feed GPS/GSpd/Hdg). Must be false for flying.
 M.SIMULATE  = false
+M.COMPASS_PATH = "/SCRIPTS/GPSHOMER/compass.lua"   -- compass drawing for the widgets
 M.SOUND_DIR = "/SOUNDS/en/SCRIPTS/GPSHOMER/"
 M.SOUNDS = {
   ready = "gpsready.wav", -- "ready to fly" (stable fix, home not set yet)
   fix  = "gpsfix.wav",   -- "home set"
   lost = "gpslost.wav",  -- "GPS lost"
   rec  = "gpsrec.wav",   -- "GPS recovered"
+  alt  = "altitude.wav", -- "Warning, maximum altitude"
 }
 
 -- Factory defaults for the event sounds, frozen BEFORE any config overlay so the
 -- tool can offer a true "Default" per event and applyConfigOverrides stays
 -- idempotent regardless of call order.
-M.SOUND_DEFAULTS = { ready = M.SOUNDS.ready, fix = M.SOUNDS.fix, lost = M.SOUNDS.lost, rec = M.SOUNDS.rec }
-M.SOUND_KEYS     = { "ready", "fix", "lost", "rec" }
+M.SOUND_DEFAULTS = { ready = M.SOUNDS.ready, fix = M.SOUNDS.fix, lost = M.SOUNDS.lost, rec = M.SOUNDS.rec,
+                     alt = M.SOUNDS.alt }
+M.SOUND_KEYS     = { "ready", "fix", "lost", "rec", "alt" }
 
 -- Tunable parameters. HOME_MIN_SATS and the two HAPTIC values are pilot-editable
 -- (via the tool / config.lua); the rest are fixed core constants (PC edit only).
 -- Times are in SECONDS (converted to ms at each comparison), TICK_MS is in ms.
 M.PARAMS = {
   HOME_MIN_SATS  = 6,      -- FR-6: min. sats for the home set   (config: homeMinSats)
+  AUDIO           = true,  -- Play announcements at all (false = every sound off; config: audio)
   HAPTIC          = false, -- Vibrate alongside an event sound (opt-in; config: haptic)
   HAPTIC_STRENGTH = 2,     -- Pulse-length tier: 1 = soft, 2 = normal, 3 = strong
-  UNITS           = "metric", -- display units: "metric" (m, km/h) or "imperial" (ft, mph); config: units
-  DOP             = true,  -- show the FC's PDOP / HDOP while disarmed (MSP, ArduPilot passthrough); config: dop
+  UNITS           = "metric", -- display units: "metric" (m, km/h) or "imperial" (ft, mph); the radio's setting, see below
+  MAX_ALT         = 0,     -- announce once above this altitude over home, 0 = off (sensor units); config: maxAlt
+  MAX_ALT_HYST    = 10,    -- must drop this far below MAX_ALT before it can announce again
   DOP_POLL_T      = 1,     -- MSP request interval on the ground (s)
   DOP_STALE_T     = 3,     -- a DOP older than this is not shown (s)
   DOP_MAX_MISSES  = 5,     -- unanswered requests in a row before giving up
@@ -87,9 +100,11 @@ M.PARAMS = {
   HOME_STABLE_T  = 3,      -- fix must stay ok this long for "ready" / home set without FM (s)
   MOVE_LOCK_T    = 1,      -- moving this long before home is set locks home (no FM only) (s)
   HOME_NEAR_M    = 15,     -- closer than this: "at home", no arrow / bearing (m)
+  FLOWN_STEP_M   = 10,     -- flown distance counts a move only once this far from the last counted point (m)
+  FLOWN_JUMP_M   = 1000,   -- a step longer than this is a GPS glitch and not counted (m)
+  TRACK_STEP_M   = 20,     -- flight track: a point once this far from the last one (m)
+  TRACK_MAX      = 100,    -- flight track: points kept, the oldest go first (about the last 2 km)
   FIX_LOSS_T     = 3,      -- NFR-4: fix-loss debounce (s)
-  LINK_LOSS_T    = 1.5,    -- ACTIVE -> ENDED after this much sustained link loss (s)
-  ENDED_HOLD_T   = 60,     -- FR-13: ENDED holds the last position this long (s)
   AHEAD_DEG      = 15,     -- |rel| <= this -> "ahead"
   BEHIND_DEG     = 165,    -- |rel| >= this -> "behind"
   TICK_MS        = 100,    -- NFR-1: 10 Hz update throttle (ms)
@@ -98,19 +113,24 @@ M.PARAMS = {
 -- playHaptic pulse length per strength tier, and pulses per event: GPS lost
 -- fires twice to feel clearly stronger than the two "good news" events.
 M.HAPTIC_DUR    = { [1] = 15, [2] = 30, [3] = 50 }
-M.HAPTIC_PULSES = { ready = 1, fix = 1, lost = 2, rec = 1 }
+M.HAPTIC_PULSES = { ready = 1, fix = 1, lost = 2, rec = 1, alt = 2 }
 
 -- Editable ranges: the SINGLE source for both the on-radio editor and the
 -- runtime clamp in normalizeConfig, so they can never drift apart.
 M.LIMITS = {
   homeMinSats     = { min = 4, max = 20, step = 1 },
   hapticStrength  = { min = 1, max = 3,  step = 1 },
+  maxAlt          = { min = 0, max = 500, step = 10 },
 }
 
--- Display unit systems the config may name (editor list and normalize check).
-M.UNIT_CHOICES = { "metric", "imperial" }
+-- Display units follow the radio's system setting (Units: metric / imperial).
+do
+  local ok, gs = pcall(getGeneralSettings)
+  if ok and type(gs) == "table" and type(gs.imperial) == "number" and gs.imperial ~= 0 then
+    M.PARAMS.UNITS = "imperial"
+  end
+end
 
-M.CONFIG_PATH           = "/SCRIPTS/GPSHOMER/config.lua"
 M.CONFIG_SCHEMA_VERSION = 1
 
 -- Flight log: the last position of the three most recent flights, written
@@ -127,10 +147,10 @@ M.MAP_URL                = "https://maps.google.com/?q="
 -- what normalizeConfig falls back to (PARAMS is already overlaid by then).
 M.DEFAULTS = {
   homeMinSats    = M.PARAMS.HOME_MIN_SATS,
+  audio          = M.PARAMS.AUDIO,
   haptic         = M.PARAMS.HAPTIC,
   hapticStrength = M.PARAMS.HAPTIC_STRENGTH,
-  units          = M.PARAMS.UNITS,
-  dop            = M.PARAMS.DOP,
+  maxAlt         = M.PARAMS.MAX_ALT,
 }
 local DEFAULTS = M.DEFAULTS
 
@@ -175,12 +195,6 @@ local function boolOr(v, fallback)
   return fallback
 end
 
--- A listed unit system is kept; anything else falls back.
-local function unitsOr(v, fallback)
-  for _, u in ipairs(M.UNIT_CHOICES) do if v == u then return v end end
-  return fallback
-end
-
 -- True unless fstat positively says the file is gone. fstat is absent on the
 -- desktop and pcall-guarded, so "unknown" keeps the custom name.
 local function soundFileExists(name)
@@ -193,13 +207,14 @@ end
 -- when the file no longer exists on the card, so the event still sounds), `false`
 -- means the pilot muted this event, and anything else (nil/garbage) falls back
 -- to the default so playFile can never receive junk.
-local function soundOr(v, fallback)
+local function soundOr(v)
   if type(v) == "string" then
-    if soundFileExists(v) then return v end
-    return fallback
+    local name = string.match(v, "[^/]+$")
+    if name and soundFileExists(name) then return name end
+    return nil
   end
   if v == false then return false end
-  return fallback
+  return nil
 end
 
 -- getTime() ticks are 10 ms; work in ms so the SECONDS params scale cleanly.
@@ -343,31 +358,31 @@ end
 -- Config overlay (pure: no file I/O, directly unit-testable)
 -- ---------------------------------------------------------------------------
 
--- Normalise a parsed config table into a clean copy (never touches PARAMS; the
--- only I/O is one fstat per custom sound): homeMinSats clamped to LIMITS, wrong
--- types replaced by the factory default, a sound is a file name, false (muted)
--- or nil (default). The ONE place that decides what a config value means: the
--- runtime overlay below and the tool's editor both go through here, so they
--- can never disagree on a hand-edited file.
+-- Normalise a parsed config table into a copy (never touches PARAMS; the only
+-- I/O is one fstat per custom sound): values clamped to LIMITS, wrong types
+-- replaced by the factory default, a sound is a file name, false (muted) or nil
+-- (default). Unknown entries are kept as they are, so a setting written by a
+-- newer version survives a save through this one. The ONE place that decides
+-- what a config value means: the runtime overlay and the settings tool both go
+-- through here, so they can never disagree on a hand-edited file.
 function M.normalizeConfig(cfg)
-  cfg = cfg or {}
-  local L   = M.LIMITS
-  local snd = (type(cfg.sounds) == "table") and cfg.sounds or {}
-  return {
-    homeMinSats = clampNum(cfg.homeMinSats,
-                    L.homeMinSats.min, L.homeMinSats.max, DEFAULTS.homeMinSats),
-    haptic         = boolOr(cfg.haptic, DEFAULTS.haptic),
-    hapticStrength = clampNum(cfg.hapticStrength,
-                    L.hapticStrength.min, L.hapticStrength.max, DEFAULTS.hapticStrength),
-    units          = unitsOr(cfg.units, DEFAULTS.units),
-    dop            = boolOr(cfg.dop, DEFAULTS.dop),
-    sounds = {
-      ready = soundOr(snd.ready, nil),
-      fix  = soundOr(snd.fix,  nil),
-      lost = soundOr(snd.lost, nil),
-      rec  = soundOr(snd.rec,  nil),
-    },
-  }
+  local out = {}
+  if type(cfg) == "table" then for k, v in pairs(cfg) do out[k] = v end end
+  local L = M.LIMITS
+  out.homeMinSats    = clampNum(out.homeMinSats,
+                         L.homeMinSats.min, L.homeMinSats.max, DEFAULTS.homeMinSats)
+  out.audio          = boolOr(out.audio, DEFAULTS.audio)
+  out.haptic         = boolOr(out.haptic, DEFAULTS.haptic)
+  out.hapticStrength = clampNum(out.hapticStrength,
+                         L.hapticStrength.min, L.hapticStrength.max, DEFAULTS.hapticStrength)
+  out.units          = nil   -- now the radio's setting; dropped from older configs
+  out.maxAlt         = clampNum(out.maxAlt, L.maxAlt.min, L.maxAlt.max, DEFAULTS.maxAlt)
+  local snd, sounds = (type(out.sounds) == "table") and out.sounds or {}, {}
+  for k, v in pairs(snd) do sounds[k] = v end
+  for _, k in ipairs(M.SOUND_KEYS) do sounds[k] = soundOr(snd[k]) end
+  out.sounds = sounds
+  if type(out.generation) ~= "number" then out.generation = 0 end
+  return out
 end
 
 -- Overlay a parsed config table onto PARAMS/SOUNDS. DEFAULTS / SOUND_DEFAULTS
@@ -375,10 +390,10 @@ end
 function M.applyConfigOverrides(cfg)
   local n = M.normalizeConfig(cfg)
   M.PARAMS.HOME_MIN_SATS   = n.homeMinSats
+  M.PARAMS.AUDIO           = n.audio
   M.PARAMS.HAPTIC          = n.haptic
   M.PARAMS.HAPTIC_STRENGTH = n.hapticStrength
-  M.PARAMS.UNITS           = n.units
-  M.PARAMS.DOP             = n.dop
+  M.PARAMS.MAX_ALT         = n.maxAlt
   for _, k in ipairs(M.SOUND_KEYS) do
     local v = n.sounds[k]
     if v == nil then v = M.SOUND_DEFAULTS[k] end
@@ -386,24 +401,6 @@ function M.applyConfigOverrides(cfg)
   end
 end
 
--- Load the optional config ONCE at module load. Thresholds are ground config
--- (not retuned mid-flight), so a single read is enough and there is no per-tick
--- file I/O. Fully fault tolerant: a missing, unparsable or schema-mismatched
--- file silently leaves the defaults in force (the config is not flight
--- critical; the tool reports and repairs a broken file on the ground).
--- loadScript is the documented EdgeTX loader (nil when missing/broken) and does
--- not exist on desktop, so unit tests are unaffected.
--- Text only, no .luac (mode "tx"): the radio would prefer a compiled copy with the
--- same 2 s FAT timestamp over a newer file.
-local function loadConfigOnce()
-  local chunk = loadScript and loadScript(M.CONFIG_PATH, "tx")
-  if not chunk then return end
-  local ok, result = pcall(chunk)
-  if not ok or type(result) ~= "table" then return end
-  if result.schemaVersion ~= M.CONFIG_SCHEMA_VERSION then return end
-  M.applyConfigOverrides(result)
-end
-pcall(loadConfigOnce)
 
 -- ---------------------------------------------------------------------------
 -- Files and the flight log
@@ -441,7 +438,7 @@ end
 
 -- Logged flights, newest first. A missing, unparsable or foreign-schema file
 -- reads as an empty log: it is a convenience, never flight critical. Loaded as
--- text only like the config (see loadConfigOnce).
+-- text only like the config (see loadConfig).
 function M.readFlights()
   local chunk = loadScript and loadScript(M.FLIGHTS_PATH, "tx")
   if not chunk then return {} end
@@ -481,6 +478,116 @@ function M.clearFlights()
   return writeFlights({})
 end
 
+-- ---------------------------------------------------------------------------
+-- Config file: load, save, defaults, resets, reload. Written by the settings
+-- tool; the file is OPTIONAL, without it (or with a broken one) the defaults
+-- stay in force (the config is not flight critical).
+-- ---------------------------------------------------------------------------
+
+local function quoteString(s)
+  s = string.gsub(s, "\\", "\\\\")
+  s = string.gsub(s, '"', '\\"')
+  s = string.gsub(s, "\n", "\\n")
+  return '"' .. s .. '"'
+end
+
+-- Lua source for a value; string keys sorted so the file is stable.
+local function serialize(value, indent)
+  local t = type(value)
+  if t == "number" or t == "boolean" then return tostring(value) end
+  if t == "string" then return quoteString(value) end
+  if t ~= "table" then return "nil" end
+  local nextIndent, parts, n = indent .. "  ", {}, #value
+  for i = 1, n do parts[#parts + 1] = nextIndent .. serialize(value[i], nextIndent) end
+  local keys = {}
+  for k in pairs(value) do
+    if not (type(k) == "number" and k >= 1 and k <= n and math.floor(k) == k) then
+      keys[#keys + 1] = k
+    end
+  end
+  table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+  for _, k in ipairs(keys) do
+    local keyStr = (type(k) == "string") and ("[" .. quoteString(k) .. "]") or ("[" .. tostring(k) .. "]")
+    parts[#parts + 1] = nextIndent .. keyStr .. " = " .. serialize(value[k], nextIndent)
+  end
+  if #parts == 0 then return "{}" end
+  return "{\n" .. table.concat(parts, ",\n") .. ",\n" .. indent .. "}"
+end
+
+-- Returns the normalised config, or nil plus "missing" | "parse" | "schema"
+-- (and a detail text). Text only, no .luac (mode "tx"): the radio would prefer
+-- a compiled copy with the same 2 s FAT timestamp over a newer file.
+function M.loadConfig()
+  local ok, f = pcall(io.open, M.CONFIG_PATH, "r")
+  if not ok or not f then return nil, "missing" end
+  pcall(io.close, f)
+  local cok, chunk, err = pcall(loadScript, M.CONFIG_PATH, "tx")
+  if not cok or not chunk then return nil, "parse", tostring(err or chunk) end
+  local pok, result = pcall(chunk)
+  if not pok then return nil, "parse", tostring(result) end
+  if type(result) ~= "table" then return nil, "parse", "not a table" end
+  if result.schemaVersion ~= M.CONFIG_SCHEMA_VERSION then
+    return nil, "schema", tostring(result.schemaVersion)
+  end
+  return M.normalizeConfig(result)
+end
+
+-- Writes the config with a raised generation (the reload sentinel). True on success.
+function M.saveConfig(cfg)
+  cfg.schemaVersion = M.CONFIG_SCHEMA_VERSION
+  cfg.generation    = (cfg.generation or 0) + 1
+  return M.writeFile(M.CONFIG_PATH, "-- GPS Homer configuration (auto-generated).\nreturn "
+                                    .. serialize(cfg, "") .. "\n")
+end
+
+-- Factory settings as a fresh table.
+function M.defaultConfig()
+  local cfg = M.normalizeConfig({})
+  cfg.schemaVersion = M.CONFIG_SCHEMA_VERSION
+  return cfg
+end
+
+-- Factory settings that keep the shared ones (audio, haptic): those are set once
+-- for all scripts in the settings tool and no project reset touches them.
+local function freshKeepingShared()
+  local cfg = M.loadConfig() or M.defaultConfig()
+  local fresh = M.defaultConfig()
+  fresh.audio, fresh.haptic, fresh.hapticStrength = cfg.audio, cfg.haptic, cfg.hapticStrength
+  fresh.generation = cfg.generation
+  return fresh
+end
+
+-- Settings back to factory values; the flight log stays. True on success.
+function M.resetSettings()
+  return M.saveConfig(freshKeepingShared())
+end
+
+-- Settings back to factory values and the flight log emptied. True on success.
+function M.factoryReset()
+  local ok = M.saveConfig(freshKeepingShared())
+  return M.clearFlights() and ok
+end
+
+-- Re-reads the config at most every CONFIG_POLL_MS and applies it when its
+-- generation changed (or it appeared / went away), so a change made in the
+-- settings tool takes effect without a model reload.
+local CONFIG_POLL_MS = 5000
+local configGen, configPollAt
+function M.pollConfig(now)
+  now = now or getTime() * 10
+  if configPollAt and now - configPollAt < CONFIG_POLL_MS then return end
+  configPollAt = now
+  local cfg, kind = M.loadConfig()
+  -- damaged or wrong version: defaults stay in use, but it is a setup error
+  M.configDamaged = (kind == "parse" or kind == "schema")
+  local gen = cfg and cfg.generation or false
+  if gen ~= configGen then
+    configGen = gen
+    M.applyConfigOverrides(cfg or {})
+  end
+end
+pcall(M.pollConfig, 0)
+
 -- Prepends one position and keeps the newest FLIGHTS_MAX. Date, time and model
 -- name are best effort: the radio clock may be unset and the host tests have
 -- neither call. Returns true when the file was written.
@@ -502,16 +609,12 @@ function M.logFlight(lat, lon)
   return writeFlights(flights)
 end
 
--- Decimal degrees -> 41\194\17637'18.56"N (degree sign as UTF-8 bytes, the only
--- non-ASCII glyph; EdgeTX renders it in its own GPS sensor view). Rounded to
--- 1/100 s in integer math so seconds can never print as 60.00. Shared, so the
--- widget's end screen and the tool's flight log read identically.
-function M.formatDMS(v, pos, neg)
-  local hemi = (v < 0) and neg or pos
-  local t = math.floor(math.abs(v) * 360000 + 0.5)   -- hundredths of a second
-  local d = math.floor(t / 360000); t = t - d * 360000
-  local m = math.floor(t / 6000);   t = t - m * 6000
-  return string.format("%d\194\176%02d'%05.2f\"%s", d, m, t / 100, hemi)
+-- Coordinate for display: decimal degrees with five places (about 1 m), the
+-- form map apps take. EdgeTX Lua numbers carry about 7 digits, so a sixth place
+-- would only show noise. Shared, so the widget's end screen and the tool's flight
+-- log read identically.
+function M.formatCoord(v)
+  return string.format("%.5f", v)
 end
 
 -- Map link for a position, short enough for the QR symbol the tool draws.
@@ -524,22 +627,118 @@ end
 -- ---------------------------------------------------------------------------
 
 -- The sensors the script cannot work without (the GPS frame).
--- Alt is display-only, so it is not mandatory.
+-- Alt is optional: without it there is no altitude and no Max altitude warning.
 local REQUIRED = { "gps", "sats", "gspd", "hdg" }
 
--- Armed state from the CRSF flight-mode text. Betaflight (>= 4.0) marks
--- disarmed with a trailing "*" (ready), "!" (arming blocked) or "?" (rescue
--- n/a); INAV sends "OK", "WAIT" or "!ERR" instead. Armed strings carry no
--- marker; "!FS!" (failsafe) is armed despite its trailing "!". Returns armed,
--- known; known = false when the value is not a usable string (sensor absent),
--- then the caller falls back.
+-- Setup errors that need no telemetry, one text each (the settings tool lists
+-- them; a widget only shows that there is one): required sensors not
+-- discovered in the model. state as kept by update; without it a fresh one.
+function M.setupErrors(state)
+  state = state or M.newState()
+  local out = {}
+  if M.configDamaged then out[1] = "Settings file damaged" end   -- defaults in use
+  -- The compass drawing (also loaded by other widgets) ships with the core.
+  local ok, st = pcall(function() return fstat and fstat(M.COMPASS_PATH) end)
+  if fstat and ok and not st then
+    out[#out + 1] = "Compass file missing"
+    out[#out + 1] = "Reinstall GPS Homer"
+  end
+  local has = sensorsPresent(state, M.SENSORS, nowMs(), SENSOR_CHECK_MS)
+  local missing = {}
+  for _, k in ipairs(REQUIRED) do
+    if not has[k] then missing[#missing + 1] = M.SENSORS[k] end
+  end
+  if #missing > 0 then
+    out[#out + 1] = "Missing sensors: " .. table.concat(missing, ", ")
+    out[#out + 1] = "Check sensors config"
+  end
+  return out
+end
+
+-- Disarmed marker in the FM text: Betaflight appends * ! ?, ArduPilot *,
+-- INAV sends OK / WAIT / !ERR. "!FS!" (failsafe) is armed despite its "!".
 local INAV_DISARMED = { OK = true, WAIT = true, ["!ERR"] = true }
-function M.armedFromFM(v)
-  if type(v) ~= "string" or #v == 0 then return false, false end
-  if v == "!FS!" then return true, true end
-  if INAV_DISARMED[v] then return false, true end
-  local last = string.sub(v, -1)
-  return not (last == "*" or last == "!" or last == "?"), true
+local function fmDisarmed(fm)
+  if fm == "!FS!" then return false end
+  if INAV_DISARMED[fm] then return true end
+  local last = string.sub(fm, -1)
+  return last == "*" or last == "!" or last == "?"
+end
+
+-- armed, known. Known only once a disarmed marker was seen on this link
+-- (state.disarmSeen): some setups never send one, and a text without a marker
+-- alone proves nothing. Clear state.disarmSeen when the flight ends.
+local function armedFromFM(state, fm)
+  if type(fm) ~= "string" or fm == "" then return false, false end
+  if fmDisarmed(fm) then
+    state.disarmSeen = true
+    return false, true
+  end
+  if not state.disarmSeen then return false, false end
+  return true, true
+end
+M.armedFromFM = armedFromFM
+
+-- Flight phases, word for word the same in every script. They pick the page:
+-- WAITING (no link) -> PRE (link up) -> FLIGHT (armed, or the app's preflight
+-- check met for PRE_HOLD_T without a break) -> ENDED (link lost LINK_LOSS_T)
+-- -> WAITING after ENDED_HOLD_T. No way back from FLIGHT to PRE (a disarm keeps
+-- FLIGHT). A loss in PRE goes straight to WAITING (no flight). A loss while
+-- armed is a link failure: back within ENDED_HOLD_T, the same flight goes on.
+-- Display only: logic that needs the real armed state reads armedFromFM.
+-- Times in ms. Returns the phase and an event: "new" (a new flight starts in
+-- PRE), "lost" (PRE -> WAITING), "end" (FLIGHT -> ENDED, s.linkFailure tells
+-- why), "resume" (link back after a failure) or "over" (ENDED_HOLD_T without
+-- link), else nil.
+local LINK_LOSS_T, ENDED_HOLD_T, PRE_HOLD_T = 1500, 30000, 15000
+local function flightPhase(s, up, armed, ready, now)
+  local phase, event = s.phase or "WAITING", nil
+  local lost = linkLost(s, up, now, LINK_LOSS_T)
+  if up then s.armedBeforeLoss = armed == true end
+  if phase == "WAITING" then
+    if up then phase, event = "PRE", "new" end
+  elseif phase == "ENDED" then
+    if up and s.linkFailure then
+      phase, event = "FLIGHT", "resume"
+    elseif up then
+      phase, event = "PRE", "new"
+    elseif now - s.endedAt >= ENDED_HOLD_T then
+      phase, event = "WAITING", "over"
+    end
+    if phase ~= "ENDED" then s.linkFailure = nil end
+  elseif phase == "FLIGHT" then
+    if lost then
+      phase, event, s.endedAt, s.linkFailure = "ENDED", "end", now, s.armedBeforeLoss
+    end
+  elseif lost then
+    phase, event = "WAITING", "lost"
+  elseif up then
+    if not ready then s.readySince = nil elseif not s.readySince then s.readySince = now end
+    if armed or (s.readySince and now - s.readySince >= PRE_HOLD_T) then phase = "FLIGHT" end
+  end
+  if phase ~= "PRE" then s.readySince = nil end
+  s.phase = phase
+  return phase, event
+end
+M.flightPhase = flightPhase
+M.LINK_LOSS_T, M.ENDED_HOLD_T, M.PRE_HOLD_T = LINK_LOSS_T, ENDED_HOLD_T, PRE_HOLD_T
+
+-- DOP quality: 0 good, 1 fair, 2 poor (nil DOP: 0). PDOP includes the vertical
+-- part and runs about 1.5 to 2 times HDOP.
+local DOP_STAGES = { HDOP = { good = 1.5, fair = 2.5 }, PDOP = { good = 2.5, fair = 4.0 } }
+function M.dopStage(dop, kind)
+  if not dop then return 0 end
+  local s = DOP_STAGES[kind] or DOP_STAGES.PDOP
+  if dop < s.good then return 0 end
+  return (dop < s.fair) and 1 or 2
+end
+
+-- Preflight check of the GPS: fix "nofix" / "settling" / "ready" as status
+-- text and level (0 ok, 1 warning), plus the DOP stage. Met with both at 0.
+local GPS_STATUS = { nofix = { "NO FIX", 1 }, settling = { "FIX SETTLING", 1 }, ready = { "GPS READY", 0 } }
+function M.preflight(fix, dop, dopKind)
+  local st = GPS_STATUS[fix] or GPS_STATUS.nofix
+  return { text = st[1], level = st[2], dopStage = M.dopStage(dop, dopKind) }
 end
 
 -- Flight controller firmware from a disarmed flight-mode text, for the DOP
@@ -613,6 +812,17 @@ function M.parseRawGpsDop(data)
   return dop / 100
 end
 
+-- Fix type from the same reply: "NONE", "2D" or "3D"; nil for any other frame.
+-- Betaflight sends only fix yes/no (with u-blox set for a 3D fix only), INAV
+-- 0/1/2 for none/2D/3D, so the firmware decides what 1 means.
+function M.parseRawGpsFix(data, fcKind)
+  if M.parseRawGpsDop(data) == nil then return nil end
+  local f = data[6]
+  if f == 0 then return "NONE" end
+  if fcKind == "INAV" and f == 1 then return "2D" end
+  return "3D"
+end
+
 -- HDOP from an ArduPilot passthrough frame (0x80, legacy 0x7F): ArduPilot sends
 -- them with RC_OPTIONS bit 8, the ELRS TX module in MAVLink mode always. Value
 -- 0x5002 (GPS status): fix in bits 4-5, HDOP in dm as 7 bits x 10^bit 6.
@@ -627,52 +837,70 @@ local function gpsStatusHdop(v)
   return dm / 10
 end
 local function u32(d, i) return d[i] + d[i + 1] * 256 + d[i + 2] * 65536 + d[i + 3] * 16777216 end
-function M.parsePassthroughHdop(cmd, data)
+-- The 0x5002 value of a passthrough frame, or nil.
+local function passthroughGpsStatus(cmd, data)
   if (cmd ~= 0x80 and cmd ~= 0x7F) or type(data) ~= "table" then return nil end
   if data[1] == 0xF0 and #data >= 7 and data[2] + data[3] * 256 == 0x5002 then
-    return gpsStatusHdop(u32(data, 4))
+    return u32(data, 4)
   elseif data[1] == 0xF2 and #data >= 8 then
     for i = 0, math.min(data[2] or 0, 9) - 1 do
       local p = 3 + 6 * i
       if #data >= p + 5 and data[p] + data[p + 1] * 256 == 0x5002 then
-        return gpsStatusHdop(u32(data, p + 2))
+        return u32(data, p + 2)
       end
     end
   end
   return nil
 end
+function M.parsePassthroughHdop(cmd, data)
+  local v = passthroughGpsStatus(cmd, data)
+  return v and gpsStatusHdop(v)
+end
+-- Fix type from the same value (bits 4-5: no GPS, no fix, 2D, 3D or better):
+-- "NONE", "2D" or "3D"; nil without a 0x5002 value.
+local PT_FIX = { [0] = "NONE", [1] = "NONE", [2] = "2D", [3] = "3D" }
+function M.parsePassthroughFix(cmd, data)
+  local v = passthroughGpsStatus(cmd, data)
+  return v and PT_FIX[math.floor(v / 16) % 4]
+end
 
--- One DOP step per tick: drain MSP replies and passthrough frames, send the
--- next MSP request when due. Requests stop after DOP_MAX_MISSES unanswered ones
--- or a reply without the DOP field (ArduPilot does not answer MSP, older
--- firmware lacks the field); a reply without a fix keeps asking. Returns the
--- last DOP while it is fresh, else nil.
-local MSP_POP_MAX = 20
+-- One CRSF frame, popped by the caller (the caller drains the queue once per
+-- cycle so other consumers in the same script get the frames too): MSP replies
+-- and ArduPilot passthrough HDOP. Taken on the ground before the first flight
+-- (as of the last tick) and while a reply is still due after arming.
+function M.handleFrame(state, cmd, data, now)
+  local P = M.PARAMS
+  if not state.useMsp then return end
+  now = now or nowMs()
+  local late = state.dopWaiting and now - state.dopSentAt < P.DOP_STALE_T * 1000
+  if not (state.dopGround or late) then return end
+  if cmd == MSP_RESP then
+    local dop = M.parseRawGpsDop(data)
+    if dop ~= nil then
+      state.dopWaiting = false
+      state.dopMisses  = dop and 0 or P.DOP_MAX_MISSES   -- only a missing field gives up
+      if dop and dop > 0 then state.dop, state.dopAt = dop, now end
+      -- Read in readSnapshot: the FM text may tell the firmware only after this frame.
+      state.fixReply, state.fix, state.fixAt = data, nil, now
+    end
+  else
+    local hdop = M.parsePassthroughHdop(cmd, data)
+    if hdop then state.dop, state.dopAt, state.fcKind = hdop, now, "AP" end
+    local fix = M.parsePassthroughFix(cmd, data)
+    if fix then state.fixReply, state.fix, state.fixAt, state.fcKind = nil, fix, now, "AP" end
+  end
+end
+
+-- One DOP step per tick: send the next MSP request when due. Requests stop after
+-- DOP_MAX_MISSES unanswered ones or a reply without the DOP field (ArduPilot
+-- does not answer MSP, older firmware lacks the field); a reply without a fix
+-- keeps asking. Returns the last DOP while it is fresh, else nil.
 local function pollDop(state, ground, now)
   local P = M.PARAMS
-  -- After arming, a reply already on its way is still collected for a moment.
-  local late   = state.dopWaiting and now - state.dopSentAt < P.DOP_STALE_T * 1000
-  -- Drained on the whole ground (not only while asking): ArduPilot's
-  -- passthrough HDOP comes unasked.
-  if (ground or late) and crossfireTelemetryPop then
-    for _ = 1, MSP_POP_MAX do
-      local cmd, data = crossfireTelemetryPop()
-      if cmd == nil then break end
-      if cmd == MSP_RESP then
-        local dop = M.parseRawGpsDop(data)
-        if dop ~= nil then
-          state.dopWaiting = false
-          state.dopMisses  = dop and 0 or P.DOP_MAX_MISSES   -- only a missing field gives up
-          if dop and dop > 0 then state.dop, state.dopAt = dop, now end
-        end
-      else
-        local hdop = M.parsePassthroughHdop(cmd, data)
-        if hdop then state.dop, state.dopAt, state.fcKind = hdop, now, "AP" end
-      end
-    end
-  end
-  -- Decided after draining, so a passthrough frame that just came in counts.
-  -- ArduPilot answers no MSP: no requests (and no telemetry boost) at all.
+  state.dopGround = ground
+  -- Frames of this cycle were handed over before, so a passthrough frame that
+  -- just came in already counts. ArduPilot answers no MSP: no requests (and no
+  -- telemetry boost) at all.
   local active = ground and state.dopMisses < P.DOP_MAX_MISSES and state.fcKind ~= "AP"
   if active and crossfireTelemetryPush
      and (state.dopSentAt == nil or now - state.dopSentAt >= P.DOP_POLL_T * 1000)
@@ -714,17 +942,22 @@ function M.readSnapshot(state, now)
   end
 
   local fm = readPresent(has, S, "fm")
-  local armed, armedKnown = M.armedFromFM(fm)
+  local armed, armedKnown = armedFromFM(state, fm)
 
   -- DOP only for a caller that asked for it (the widget) and only on the ground
   -- before the first flight: after a landing ALT and DIST stay (finding the
   -- model), and ELRS is not switched to 1:2 again.
   -- The firmware is remembered from the first text that tells (Betaflight shows
   -- "!" or "?" right after power-up, before the fix or during the boot grace).
-  local dop
-  if state.useMsp and M.PARAMS.DOP then
+  local dop, fix
+  if state.useMsp then
     if not state.fcKind then state.fcKind = M.fcFromFM(fm) end
-    dop = pollDop(state, telem and armedKnown and not armed and not state.homeSet, now)
+    -- only with a known armed state, disarmed and before the flight page (only the
+    -- preflight page shows the DOP; after arming the phase never returns to it)
+    dop = pollDop(state, telem and armedKnown and not armed and state.phase ~= "FLIGHT", now)
+    if state.fixAt and now - state.fixAt <= M.PARAMS.DOP_STALE_T * 1000 then
+      fix = state.fixReply and M.parseRawGpsFix(state.fixReply, state.fcKind) or state.fix
+    end
   end
 
   return {
@@ -736,11 +969,13 @@ function M.readSnapshot(state, now)
     alt           = alt,
     armed         = armed,
     armedKnown    = armedKnown,
+    fmText        = type(fm) == "string" and fm ~= "",   -- any FM text this sample
     alert         = M.alertFromFM(fm),
     homeReset     = fm == "HRST",   -- INAV: home moved to here by switch
     dop           = dop,
     -- Betaflight replies with PDOP, INAV and ArduPilot's passthrough carry HDOP
     dopKind       = (state.fcKind == "INAV" or state.fcKind == "AP") and "HDOP" or "PDOP",
+    fix           = fix,   -- "NONE" / "2D" / "3D" from the same source as the DOP
     sensorMissing = sensorMissing,
   }
 end
@@ -760,8 +995,8 @@ end
 
 -- Reset the whole per-flight state. Called for a fresh instance and on a
 -- reconnect / ENDED-timeout (a reconnect counts as a new flight, FR-12). It does
--- NOT touch `status` -- the caller sets the target state. Note this DROPS the last
--- position, so it must never run on the ACTIVE->ENDED transition (which freezes
+-- NOT touch the flight phase (flightPhase owns it). Note this DROPS the last
+-- position, so it must never run on the FLIGHT->ENDED transition (which freezes
 -- the position for the ENDED screen).
 function M.resetFlight(state)
   state.homeSet          = false
@@ -775,17 +1010,24 @@ function M.resetFlight(state)
   state.fixOkSince       = nil   -- fix stabilisation timer (nil = not started)
   state.fixLostSince     = nil   -- fix-loss debounce timer
   state.fixLost          = false
-  state.linkLostSince    = nil   -- link-loss debounce timer
-  state.endedAt          = 0     -- when ENDED was entered (only read after set)
   state.ready            = false -- stable fix seen (READY screen) while home is unset
   state.homeLocked       = false -- moved before home was set (no FM): no home this flight
   state.moveSince        = nil   -- movement timer for the lock
   state.lastArmed        = nil   -- last armed state (nil = not seen yet; no edge)
+  state.preReady         = false -- preflight check met on the last tick (for flightPhase)
   state.courseValid      = false -- debounced course validity (updateCourseValid)
   state.courseSince      = nil
   state.readyAnnounced   = false
   state.homeAnnounced    = false
   state.fixLostAnnounced = false
+  state.flownM           = 0     -- distance flown this flight (m), for scripts that load the core
+  state.track            = {}    -- flight track { lat, lon } for a search, oldest first
+  state.flownLat         = nil   -- last point counted into flownM
+  state.flownLon         = nil
+  state.maxDistM         = nil   -- this flight's highest distance from home (m), altitude above
+  state.maxAlt           = nil   -- home and ground speed (sensor units); for scripts that load
+  state.maxGspd          = nil   -- the core
+  state.altWarned        = false -- max-altitude announcement made, re-armed below MAX_ALT - MAX_ALT_HYST
   -- last valid telemetry holds (also the frozen ENDED position)
   state.lastLat  = nil
   state.lastLon  = nil
@@ -798,27 +1040,50 @@ end
 function M.newState()
   local s = {}
   M.resetFlight(s)
-  s.status = "NO_TELEM"
+  s.phase = "WAITING"         -- flight phase (flightPhase); its link fields live here too
   -- MSP polling lives across flights (resetFlight runs on the first tick too);
   -- a new widget instance, e.g. after a model change, tries again.
   s.dop, s.dopAt = nil, nil   -- last DOP over MSP and when it came
+  s.fix, s.fixAt = nil, nil   -- last fix type ("NONE" / "2D" / "3D") and when it came
+  s.fixReply     = nil        -- or the MSP reply it is read from
   s.dopSentAt    = nil        -- last MSP request
   s.dopWaiting   = false      -- request sent, reply outstanding
   s.dopMisses    = 0          -- unanswered in a row
   s.dopSeq       = 0
   s.fcKind       = nil        -- "BF" / "INAV" / "AP" once the FM text or a passthrough frame told
+  s.dopGround    = false      -- last tick was on the ground before the first flight (handleFrame)
   return s
 end
 
 -- ---------------------------------------------------------------------------
--- State machine (pure: mutates `state`, returns a result table; no I/O)
--- States: NO_TELEM / ACQUIRING / READY / ACTIVE / ENDED. `now` is in ms.
+-- State machine (pure: mutates `state`, returns a result table; no I/O).
+-- result.phase: the page (flightPhase: WAITING / PRE / FLIGHT / ENDED);
+-- result.gpsState: ACQUIRING (no stable fix) / READY (stable fix, no home) /
+-- HOME (home set). `now` is in ms.
 -- ---------------------------------------------------------------------------
--- DOP only while disarmed and home not set yet (before the first flight).
+-- DOP and fix type only while disarmed and home not set yet (before the first flight).
 local function setDop(result, snap)
-  if snap.armedKnown and not snap.armed and snap.dop then
-    result.dop, result.dopKind = snap.dop, snap.dopKind
+  if snap.armedKnown and not snap.armed then
+    if snap.dop then result.dop, result.dopKind = snap.dop, snap.dopKind end
+    result.fix = snap.fix
   end
+end
+
+local function gpsStateOf(state)
+  return state.homeSet and "HOME" or (state.ready and "READY" or "ACQUIRING")
+end
+
+-- Fix for the preflight check from an evaluate result: "ready" (stable fix),
+-- "settling" (fix, not stable yet) or "nofix".
+function M.fixState(r)
+  if r.gpsState == "READY" or r.gpsState == "HOME" then return "ready" end
+  return r.fixLost and "nofix" or "settling"
+end
+
+-- Preflight check met: fix ready and DOP good (DOP only known on the ground).
+local function preflightMet(r)
+  local pf = M.preflight(M.fixState(r), r.dop, r.dopKind)
+  return pf.level == 0 and pf.dopStage == 0
 end
 
 function M.evaluate(state, snap, now)
@@ -833,41 +1098,37 @@ function M.evaluate(state, snap, now)
   if snap.hdg  then state.lastHdg  = snap.hdg  end
   if snap.alt  then state.lastAlt  = snap.alt  end
 
-  -- ---- telemetry offline ----
-  local lost = linkLost(state, snap.telem, now, P.LINK_LOSS_T * 1000)
-  if not snap.telem then
-    if state.status == "ACTIVE" then
-      if lost then
-        state.status  = "ENDED"        -- freeze position, stay silent (FR-13)
-        state.endedAt = now
-        if state.lastLat and state.lastLon then
-          pcall(M.logFlight, state.lastLat, state.lastLon)
-        end
-      end
-    elseif state.status == "ACQUIRING" or state.status == "READY" then
-      if lost then
-        M.resetFlight(state)           -- nothing to show -> straight to NO_TELEM
-        state.status = "NO_TELEM"
-      end
-    elseif state.status == "ENDED" then
-      if now - state.endedAt >= P.ENDED_HOLD_T * 1000 then
-        M.resetFlight(state)           -- hold elapsed -> discard position
-        state.status = "NO_TELEM"
-      end
+  -- Flight phase from the link, the armed state and the last tick's preflight
+  -- check. A new flight (also after the end hold) starts from a clean state.
+  local phase, event = flightPhase(state, snap.telem, snap.armed, state.preReady, now)
+  if event == "end" then
+    -- Armed before the gap: link failure, the flight goes on when the link is
+    -- back. Disarmed or unknown: the flight is over. Position frozen (FR-13).
+    if not state.linkFailure then state.disarmSeen = nil end
+    if state.homeSet and state.lastLat and state.lastLon then
+      pcall(M.logFlight, state.lastLat, state.lastLon)
     end
-    result.status  = state.status
-    result.lastLat = state.lastLat
-    result.lastLon = state.lastLon
+  elseif event == "lost" or event == "over" then
+    state.disarmSeen = nil   -- new flight, new proof needed
+    M.resetFlight(state)     -- lost: nothing to show; over: hold elapsed, position discarded
+  elseif event == "new" then
+    M.resetFlight(state)     -- a return of telemetry is a NEW flight (FR-12)
+  end
+  result.phase = phase
+
+  -- ---- telemetry offline ----
+  if not snap.telem then
+    result.gpsState = gpsStateOf(state)
+    result.lastLat  = state.lastLat
+    result.lastLon  = state.lastLon
+    if phase == "ENDED" then
+      result.flownM, result.maxDistM, result.track = state.flownM, state.maxDistM, state.track
+      result.maxAlt, result.maxGspd  = state.maxAlt, state.maxGspd
+    end
     return result
   end
 
   -- ---- telemetry online ----
-
-  -- A return of telemetry from a terminal/idle state is a NEW flight (FR-12).
-  if state.status == "ENDED" or state.status == "NO_TELEM" then
-    M.resetFlight(state)
-    state.status = "ACQUIRING"
-  end
 
   -- Current-sample fix validity: required sensors present, position plausible, and
   -- enough satellites -- all from THIS sample so a dropout breaks stabilisation.
@@ -949,6 +1210,8 @@ function M.evaluate(state, snap, now)
         end
       end
       state.lastArmed = armed
+    elseif homeReset then
+      setHome()
     elseif fixStable and canSetHome then
       setHome()
     end
@@ -967,8 +1230,7 @@ function M.evaluate(state, snap, now)
           end
         end
       end
-      state.status         = state.ready and "READY" or "ACQUIRING"
-      result.status        = state.status
+      result.gpsState      = gpsStateOf(state)
       result.noHome        = state.ready and not canSetHome   -- armed / locked: no home coming
       result.sats          = snap.sats or state.lastSats
       result.gspd          = state.lastGspd   -- no ALT without home: nothing to be relative to
@@ -977,13 +1239,13 @@ function M.evaluate(state, snap, now)
       if result.courseValid then result.course = state.lastHdg or 0 end
       result.sensorMissing = snap.sensorMissing
       setDop(result, snap)
+      state.preReady = preflightMet(result)
       return result
     end
     state.fixLostSince = nil   -- clean slate for the ACTIVE debounce
   end
 
-  -- ---- ACTIVE ----
-  state.status = "ACTIVE"
+  -- ---- home set (HOME) ----
 
   -- Fix-loss debounce: display stays put with the last valid values; only the
   -- flag (and the one-shot events) flip once the loss/return is confirmed.
@@ -1012,6 +1274,34 @@ function M.evaluate(state, snap, now)
     result.homeSet = true
   end
 
+  -- Distance flown: summed in steps of at least FLOWN_STEP_M, so GPS jitter
+  -- while standing still adds nothing. With FM only while armed: disarmed, the
+  -- reference point follows the model, so carrying it back adds nothing. A glitch
+  -- jump is skipped, and so is the jump back.
+  -- Flight track for a search: a point every TRACK_STEP_M, like the distance only
+  -- while armed when FM tells; the last TRACK_MAX points are kept.
+  if fixOk and not (snap.armedKnown and not snap.armed) then
+    local g, tr = snap.gps, state.track
+    local last = tr[#tr]
+    if not last or M.haversine(last[1], last[2], g.lat, g.lon) >= P.TRACK_STEP_M then
+      tr[#tr + 1] = { g.lat, g.lon }
+      if #tr > P.TRACK_MAX then table.remove(tr, 1) end
+    end
+  end
+
+  if fixOk then
+    local g = snap.gps
+    if not state.flownLat or (snap.armedKnown and not snap.armed) then
+      state.flownLat, state.flownLon = g.lat, g.lon
+    else
+      local d = M.haversine(state.flownLat, state.flownLon, g.lat, g.lon)
+      if d >= P.FLOWN_STEP_M then
+        if d <= P.FLOWN_JUMP_M then state.flownM = state.flownM + d end
+        state.flownLat, state.flownLon = g.lat, g.lon
+      end
+    end
+  end
+
   -- Derived display values from the last valid telemetry.
   local lat, lon = state.lastLat, state.lastLon
   if lat and lon and state.homeLat then
@@ -1027,15 +1317,39 @@ function M.evaluate(state, snap, now)
     result.atHome = result.distanceM < P.HOME_NEAR_M
   end
 
-  result.status            = "ACTIVE"
+  -- Flight maxima, like the flown distance only while armed when FM tells.
+  local alt = state.lastAlt and state.homeAlt and state.lastAlt - state.homeAlt
+  if not (snap.armedKnown and not snap.armed) then
+    local d, g = result.distanceM, state.lastGspd
+    if d and (not state.maxDistM or d > state.maxDistM) then state.maxDistM = d end
+    if alt and (not state.maxAlt or alt > state.maxAlt) then state.maxAlt = alt end
+    if g and (not state.maxGspd or g > state.maxGspd) then state.maxGspd = g end
+    -- Max altitude: one announcement per climb above the limit.
+    if P.MAX_ALT > 0 and alt then
+      if not state.altWarned and alt > P.MAX_ALT then
+        state.altWarned = true
+        result.altEvent = true   -- one-shot for the sound
+      elseif state.altWarned and alt < P.MAX_ALT - P.MAX_ALT_HYST then
+        state.altWarned = false
+      end
+    end
+  end
+
+  result.gpsState          = "HOME"
   result.sats              = snap.sats or state.lastSats
-  result.alt               = state.lastAlt and state.homeAlt and state.lastAlt - state.homeAlt
+  result.alt               = alt
   result.gspd              = state.lastGspd
   result.lastLat           = lat
   result.lastLon           = lon
+  result.flownM            = state.flownM
+  result.track             = state.track
+  result.maxDistM          = state.maxDistM
+  result.maxAlt            = state.maxAlt
+  result.maxGspd           = state.maxGspd
   result.fixLost           = state.fixLost   -- persistent flag: widget colours sats red
   result.alert             = snap.alert      -- "RTH" / "FS" from the FC, nil otherwise
   result.sensorMissing = snap.sensorMissing
+  state.preReady = preflightMet(result)
   return result
 end
 
@@ -1044,7 +1358,7 @@ end
 -- ---------------------------------------------------------------------------
 
 local function playSound(file)
-  if playFile and type(file) == "string" then
+  if playFile and type(file) == "string" and M.PARAMS.AUDIO ~= false then
     playFile(M.SOUND_DIR .. file)
   end
 end
@@ -1060,8 +1374,14 @@ local function eventHaptic(key)
   end
 end
 
--- Sound plus haptic cue for one event. A muted event (SOUNDS.key == false)
--- skips playFile but still buzzes: haptic has its own on/off setting.
+-- Restarts the backlight timeout so a dark display lights up with a warning.
+local function wakeDisplay()
+  if lcd and lcd.resetBacklightTimeout then lcd.resetBacklightTimeout() end
+end
+
+-- Sound plus haptic cue for one event. A muted event (SOUNDS.key == false, or
+-- all sounds off via AUDIO) skips playFile but still buzzes: haptic has its own
+-- on/off setting.
 local function announce(key)
   playSound(M.SOUNDS[key])
   eventHaptic(key)
@@ -1069,6 +1389,7 @@ end
 
 function M.update(state, now)
   now = now or nowMs()
+  M.pollConfig(now)
   local snap   = M.readSnapshot(state, now)
   local result = M.evaluate(state, snap, now)
   result.snapshot = snap
@@ -1077,8 +1398,9 @@ function M.update(state, now)
   -- A missing WAV plays silently, no error.
   if result.readyEvent   then announce("ready") end
   if result.homeSet      then announce("fix")  end
-  if result.fixLostEvent then announce("lost") end
+  if result.fixLostEvent then announce("lost"); wakeDisplay() end
   if result.fixRecovered then announce("rec")  end
+  if result.altEvent     then announce("alt"); wakeDisplay() end
 
   return result
 end
