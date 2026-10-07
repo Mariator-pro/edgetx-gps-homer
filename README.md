@@ -64,6 +64,7 @@ Everything happens automatically:
 - **Home is set on its own, like on the flight controller.** Once the GPS fix is stable the radio says "Ready to fly"; when you arm, home is stored and the radio says "Home set".
 - **Voice only when it matters:** ready to fly, home set, GPS lost, GPS back and an optional maximum altitude warning. Each event can be muted or replaced with your own sound.
 - **Standing still or hovering slowly?** The compass ring turns north up and an `H` on it marks the direction to home (`SW 220°`), since there is no flight direction yet.
+- **Hovering after a fast straight line:** the arrow stays and turns with the nose (`HOME ~30 R`), for up to 60 s.
 - **Lost the link?** The widget keeps showing the **last known GPS position** of the model to help you find it.
 
 Besides the flight view above, the widget shows a page for each other phase of a flight:
@@ -232,7 +233,7 @@ Tap the **GPS Homer** icon for **Reset settings** (the flight list stays), **Cle
 - **Preflight page stays on `NO FIX` or `FIX SETTLING`:** Not enough satellites yet, or the fix keeps dropping. Give the GPS a clear view of the sky, away from buildings and the car.
 - **Widget shows `NO HOME` after arming, no "Home set" was spoken:** You armed before the GPS had enough satellites, so there is no home point for this flight. Land, disarm, wait for "Ready to fly" and arm again.
 - **"Ready to fly" and "Home set" always come together, before arming:** The radio does not know when the model is armed because the `FM` sensor is missing. Run a telemetry discovery to add it; until then home is stored at the first stable fix, and the model must not move before that. Some flight controllers need an extra setting for this, see [`docs/compatibility.md`](docs/compatibility.md#setup).
-- **No arrow, only a direction like "SW 220°":** The model is moving slower than 6 km/h, so the GPS cannot tell the flight direction yet. The arrow appears as soon as you fly.
+- **No arrow, only a direction like "SW 220°":** The model is moving slower than 6 km/h, so the GPS cannot tell the flight direction yet. The arrow appears as soon as you fly. After 2 s straight at 25 km/h or more it also stays while hovering, for up to 60 s.
 - **No voice at all:** Check that the `.wav` files really are in `/SOUNDS/en/SCRIPTS/GPSHOMER/` (the `en` folder is required even if your radio uses another language). The quickest check is Flight Bag: on the **Alerts** page dive into an event and press **Play**.
 - **A screen reports a missing file:** Copy the folders from this repository again, the file tree above lists everything that belongs on the card.
 

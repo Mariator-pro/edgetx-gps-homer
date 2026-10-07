@@ -615,7 +615,8 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
   -- What to show and the text under it come from the shared compass:
   -- READY / NO HOME ring, AT HOME house, or the arrow.
   local kind, lb = compass.label({ gpsState = d.gpsState, noHome = d.noHome, atHome = d.atHome, alert = d.alert,
-                                   courseValid = d.courseValid, rel = d.rel, sector = d.sector, bearing = d.bearingToHome },
+                                   courseValid = d.courseValid, estimated = d.noseEstimated, rel = d.rel,
+                                   sector = d.sector, bearing = d.bearingToHome },
                                  { ahead = core.PARAMS.AHEAD_DEG, behind = core.PARAMS.BEHIND_DEG })
   if kind ~= "arrow" then
     drawRingStatus(x0, top, W, boxH, d, rCap, small, lb.text, lb.short, labelCol(lb.col), kind == "house")
@@ -658,7 +659,7 @@ local function drawDirection(x0, top, W, boxH, d, rCap, small)
     if r < sx(8) then r = sx(8) end
     if small then
       -- Ring and label centred as one group; the label slot is measured from
-      -- the "180 R" reference so the group does not shift with the value.
+      -- the "~180 R" reference so the group does not shift with the value.
       local avail, refW = W - 2 * r - GAP, textW(ref, SMLSIZE)
       local lw = 0
       if lbl ~= "" and refW <= avail then
@@ -1010,7 +1011,8 @@ local function drawTile(ctx, z, x0, y0, W, H)
     ctx.smooth.course = compass.smooth(ctx.smooth.course, r.course)
     local d = {
       gpsState = gs, rel = ctx.smooth.rel, bearingToHome = r.bearingToHome, sector = r.sector,
-      courseValid = r.courseValid, course = ctx.smooth.course, distanceM = r.distanceM, sats = r.sats,
+      courseValid = r.courseValid, noseEstimated = r.noseEstimated, course = ctx.smooth.course,
+      distanceM = r.distanceM, sats = r.sats,
       alt = r.alt, gspd = r.gspd, fixLost = r.fixLost, noHome = r.noHome, atHome = r.atHome,
       alert = r.alert,
     }
