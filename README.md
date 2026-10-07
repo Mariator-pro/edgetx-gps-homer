@@ -224,8 +224,6 @@ Units follow the radio's own setting (**SYS → Radio setup → Units**: metric 
 
 Tap the **GPS Homer** icon for **Reset settings** (the flight list stays), **Clear flights**, **Factory reset** (both) and the version. A warning sign on the icon means something needs attention (for example no settings file yet); the popup says what to do.
 
-> **Updating from an older version?** Flight Bag removes the old "GPS Homer" Tools entry on first start. If it still shows up, delete `/SCRIPTS/TOOLS/GPSHOMER.lua` by hand.
-
 ---
 
 ## 🛠️ Troubleshooting
