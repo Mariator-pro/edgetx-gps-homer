@@ -524,11 +524,12 @@ local function drawSatsBlock(x0, y, colW, bf, d)
   return satsBlockH(bf)
 end
 
--- One list row: label left, value (+ unit) right-aligned.
+-- One list row: label left, value (+ unit) right-aligned; red over its Max limit.
 local function drawRow(x0, y, colW, r, d)
   local v = listValue(r, d)
+  local over = (r.key == "alt" and d.altOver) or (r.key == "dist" and d.distOver)
   dtext(x0, y, r.label, COLORS.muted, LIST_FONT)
-  drawValueUnit(x0 + colW - valueUnitW(v, r.unit, LIST_FONT), y, v, r.unit, COLORS.fg, LIST_FONT)
+  drawValueUnit(x0 + colW - valueUnitW(v, r.unit, LIST_FONT), y, v, r.unit, over and CRIT_COL or COLORS.fg, LIST_FONT)
 end
 
 -- Rows sit in equal bands stacked up from the bottom edge (`bottom` = tile
@@ -1014,7 +1015,7 @@ local function drawTile(ctx, z, x0, y0, W, H)
       courseValid = r.courseValid, noseEstimated = r.noseEstimated, course = ctx.smooth.course,
       distanceM = r.distanceM, sats = r.sats,
       alt = r.alt, gspd = r.gspd, fixLost = r.fixLost, noHome = r.noHome, atHome = r.atHome,
-      alert = r.alert,
+      alert = r.alert, altOver = r.altOver, distOver = r.distOver,
     }
     drawActive(W, H, x0, y0, d)
     if linkUp then drawHeartbeat(ctx) end

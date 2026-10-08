@@ -62,7 +62,7 @@ The widget shows:
 Everything happens automatically:
 
 - **Home is set on its own, like on the flight controller.** Once the GPS fix is stable the radio says "Ready to fly"; when you arm, home is stored and the radio says "Home set".
-- **Voice only when it matters:** ready to fly, home set, GPS lost, GPS back and an optional maximum altitude warning. Each event can be muted or replaced with your own sound.
+- **Voice only when it matters:** ready to fly, home set, GPS lost, GPS back and optional maximum altitude and distance warnings. Each event can be muted or replaced with your own sound.
 - **Standing still or hovering slowly?** The compass ring turns north up and an `H` on it marks the direction to home (`SW 220°`), since there is no flight direction yet.
 - **Hovering after a fast straight line:** the arrow stays and turns with the nose (`HOME ~30 R`), for up to 60 s.
 - **Lost the link?** The widget keeps showing the **last known GPS position** of the model to help you find it.
@@ -214,11 +214,12 @@ Settings are made in **Flight Bag**, a settings tool shared by several EdgeTX sc
 GPS Homer's rows sit under the heading **GPS Homer**:
 
 - **Warnings**
-  - **Home min sats**: how many satellites must be locked before home is set. **4-20** (default 6). Higher gives a more accurate home but sets it a little later.
-  - **Max altitude**: `Off` (default) or **10-500** in steps of 10, in the unit of your altitude sensor. Above this height over home the radio says "Warning, maximum altitude" once, and again only after the model has dropped 10 below the limit. With the default ELRS telemetry ratio the altitude arrives only every few seconds, so the warning can come a little late.
+  - **Minimum satellites**: how many satellites must be locked before home is set. **4-20** (default 6). Higher gives a more accurate home but sets it a little later.
+  - **Max altitude**: `Off` (default) or **10-500** in steps of 10, in the unit of your altitude sensor. Above this height over home the radio says "Maximum altitude" once, and again only after the model has dropped 10 below the limit. With the default ELRS telemetry ratio the altitude arrives only every few seconds, so the warning can come a little late. While above, ALT on the widget turns red.
+  - **Max distance**: `Off` (default) or **100-5000** in steps of 100, in m or ft (the radio's units). Farther than this from home the radio says "Maximum distance" once, and again only after the model has come 100 closer. While farther, DIST on the widget turns red.
 - **Alerts**
-  - **Sounds**, **Vibration**, **Strength**: shared by all Flight Bag scripts. `Sounds Off` silences every GPS Homer announcement. Vibration (off by default) gives two pulses for GPS lost and Max altitude and one for every other event, independent of the sound. These two warnings also switch a dimmed display back on.
-  - **Ready to fly**, **Home set**, **GPS lost**, **GPS recover**, **Max altitude**: the sound per event: `Off`, `Default` or any `.wav` you put into `/SOUNDS/en/SCRIPTS/GPSHOMER/`. **Play** previews it.
+  - **Sounds**, **Vibration**, **Strength**: shared by all Flight Bag scripts. `Sounds Off` silences every GPS Homer announcement. Vibration (off by default) gives two pulses for GPS lost, Max altitude and Max distance and one for every other event, independent of the sound. These three warnings also switch a dimmed display back on.
+  - **Ready to fly**, **Home set**, **GPS lost**, **GPS recovered**, **Max altitude**, **Max distance**: the sound per event: `Off`, `Default` or any `.wav` you put into `/SOUNDS/en/SCRIPTS/GPSHOMER/`. **Play** previews it.
 - **Last flights**: where the model was when the telemetry ended, for the last three flights, with date, time, model name, coordinates and a **QR code**. Scan it with a phone and the map app opens on that spot.
 
 Units follow the radio's own setting (**SYS → Radio setup → Units**: metric gives m and km/h, imperial ft and mph). Set the units of the altitude and speed sensors on the radio to match.
