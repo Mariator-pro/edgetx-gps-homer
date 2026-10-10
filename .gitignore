@@ -42,5 +42,4 @@ src/RADIO
 config.lua
 src/SCRIPTS/GPSHOMER/flights.lua
 
-# Simulator-only flight script
 CHANGELOG.md
