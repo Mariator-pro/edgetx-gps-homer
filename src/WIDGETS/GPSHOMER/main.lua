@@ -378,7 +378,7 @@ local function drawCrosshair(cx, cy, r, col) compass.crosshair(cx, cy, r, RING_W
 -- Compass mode (widget option): 1 Nose up = OSD style, up is the flight
 -- direction, the arrow is the steering hint to home, the ring turns with the
 -- course. 2 North up = map style, the ring is fixed, the arrow is the course
--- and an H on the ring marks home. Drawing in the shared compass.lua.
+-- and a house on the ring marks home. Drawing in the shared compass.lua.
 local NORTH_UP = false
 local function compassColors() return { track = COLORS.track, fg = COLORS.fg, muted = COLORS.muted } end
 local function drawCompassArrow(cx, cy, R, d, compact)
@@ -575,7 +575,7 @@ end
 -- capped at rCap. The degree label sits right of the arrow, vertically centred,
 -- with the largest font that fits; if even SMLSIZE does not fit beside it, the
 -- arrow shrinks and the label goes below (never in SMALL, which has no label).
--- Ring without arrow or H plus a status line where "HOME <rel>" normally sits:
+-- Ring without arrow or house plus a status line where "HOME <rel>" normally sits:
 -- READY ("READY TO FLY" / "NO HOME") and standing on the home point ("AT HOME").
 -- SMALL has no room for the ring: the word alone, centred, in SMLSIZE.
 local function drawRingStatus(x0, top, W, boxH, d, rCap, small, txt, short, col, house)

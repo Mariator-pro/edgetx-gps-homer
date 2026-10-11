@@ -63,7 +63,7 @@ Everything happens automatically:
 
 - **Home is set on its own, like on the flight controller.** Once the GPS fix is stable the radio says "Ready to fly"; when you arm, home is stored and the radio says "Home set".
 - **Voice only when it matters:** ready to fly, home set, GPS lost, GPS back and optional maximum altitude and distance warnings. Each event can be muted or replaced with your own sound.
-- **Standing still or hovering slowly?** The compass ring turns north up and an `H` on it marks the direction to home (`SW 220°`), since there is no flight direction yet.
+- **Standing still or hovering slowly?** The compass ring turns north up and a house on it marks the direction to home (`SW 220°`), since there is no flight direction yet.
 - **Hovering after a fast straight line:** the arrow stays and turns with the nose (`HOME ~30 R`), for up to 60 s.
 - **Lost the link?** The widget keeps showing the **last known GPS position** of the model to help you find it.
 
@@ -174,7 +174,7 @@ Two more files show up in `/SCRIPTS/GPSHOMER/` later, written by the radio itsel
 2. Pick a free zone, add a widget and choose **GPS Homer** from the list.
 3. *(Optional)* Open the widget settings to adjust the look:
    - **Theme**: `Dark` or `Light`.
-   - **Compass**: `NoseUp` (default): flight direction on top, the arrow points home. `NorthUp`: north on top like a map, an `H` on the ring marks home.
+   - **Compass**: `NoseUp` (default): flight direction on top, the arrow points home. `NorthUp`: north on top like a map, a house on the ring marks home.
    - **Transparency**: how much of the radio theme shows through the milky background (light theme only): `0%` opaque, `100%` no overlay.
    - **Accent**: color of the heading text: `Default` (green), `Theme` (the focus color of your EdgeTX theme) or `Custom` (pick any color under **AccentColor**).
 
