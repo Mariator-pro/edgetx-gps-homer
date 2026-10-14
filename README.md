@@ -20,6 +20,7 @@ GPS Homer puts a **home arrow on your radio**: a small EdgeTX widget that shows 
 - [🧰 Requirements](#-requirements)
 - [🧩 Script variants](#-script-variants)
 - [📥 Installation](#-installation)
+- [⚙️ Customizing](#️-customizing)
 - [🛠️ Troubleshooting](#️-troubleshooting)
 - [🤝 Contributing](#-contributing)
 - [⚠️ Disclaimer](#️-disclaimer)
@@ -205,9 +206,9 @@ For radios without a color display, or if you only want the voice announcements:
 - Switch the model off: the widget shows the end page with the flight's highest distance, altitude and speed and its last position for 30 s. The coordinates stay in the flight log, see **Last flights** in [Flight Bag](https://github.com/Mariator-pro/edgetx-flight-wingman/blob/main/docs/flightbag.md#last-flights).
 - With the function script you only hear the announcements.
 
-### 4. Settings
+## ⚙️ Customizing
 
-Thresholds, sounds and vibration are set in **Flight Bag**, the settings tool shared by several EdgeTX scripts (**SYS → Tools → Apps → Flight Bag**). All pages and rows are described in the [Flight Bag guide](https://github.com/Mariator-pro/edgetx-flight-wingman/blob/main/docs/flightbag.md). After **Save**, changes apply within a few seconds for both variants, no restart needed.
+All settings are made in **Flight Bag**, the settings tool shared by Lipo Nanny, Link Sentinel, GPS Homer and Flight Wingman (**SYS → Tools → Apps → Flight Bag**). Thresholds, sounds, vibration and display options are set there; after **Save** they apply within a few seconds, no restart needed. Every page and row is described in the [Flight Bag guide](https://github.com/Mariator-pro/edgetx-flight-wingman/blob/main/docs/flightbag.md).
 
 ---
 
