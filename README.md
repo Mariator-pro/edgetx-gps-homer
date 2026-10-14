@@ -200,7 +200,7 @@ For radios without a color display, or if you only want the voice announcements:
 ### 3. Try it out
 
 - Power the model and wait for the GPS fix. The radio's telemetry page should show values for `GPS`, `Sats`, `GSpd` and `Hdg`.
-- The widget shows the preflight page: satellites, GPS accuracy (PDOP or HDOP) and fix with `NO FIX` / `FIX SETTLING`. Once the fix is stable, the radio says "Ready to fly" and the page shows `GPS READY`; a bar at the bottom right counts down 15 s to the live view (arming switches at once).
+- The widget shows the preflight page: satellites, GPS accuracy (PDOP or HDOP) and fix with `NO FIX` / `FIX SETTLING`. Once the fix is stable, the radio says "Ready to fly" and the page shows `GPS READY` with a countdown beside it, 15 s to the live view (arming switches at once).
 - Arm the model: the radio says "Home set". Fly away: the distance grows and the arrow points back home.
 - Switch the model off: the widget shows the end page with the flight's highest distance, altitude and speed and its last position for 30 s. The coordinates stay in the flight log, see **Last flights** in Flight Bag.
 - With the function script you only hear the announcements.

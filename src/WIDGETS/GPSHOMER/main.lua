@@ -427,25 +427,20 @@ local LABEL_GAP = sx(6)
 -- not valid before the first frame.
 local function headerH() return fontH(SMLSIZE) + sx(1) end
 
--- Signal-style bars: five bars of rising height, filled from the sat count
--- (thresholds below), track colour when empty.
-local SATS_BAR_MIN = { 4, 6, 10, 15, 20 }   -- sats needed for bar 1..5
+-- Signal-style bars: five bars of rising height, filled up to the core's bar
+-- count for the sats (its thresholds), track colour when empty.
+local SATS_BARS = 5
 -- Digits inside a text box (shares of its reported height, which includes generous
 -- line spacing): baseline and digit height, measured for SMLSIZE to XXLSIZE in the
 -- TX15 and TX16S MK3 simulators (baseline 0.76 to 0.79, height 0.53 to 0.68: the
 -- smaller value keeps the bars from rising above the digits).
 local CAP_BASE, CAP_H = 0.778, 0.54
 local BAR_W, BAR_GAP = sx(3), sx(1)
-local BARS_W = #SATS_BAR_MIN * (BAR_W + BAR_GAP) - BAR_GAP
-local function satsBars(sats)
-  local n = 0
-  for i, min in ipairs(SATS_BAR_MIN) do if sats >= min then n = i end end
-  return n
-end
+local BARS_W = SATS_BARS * (BAR_W + BAR_GAP) - BAR_GAP
 local function drawSatsBars(x, y, h, sats, col)
-  local n = satsBars(sats or 0)
-  for i = 1, #SATS_BAR_MIN do
-    local bh = math.max(sx(2), math.floor(h * i / #SATS_BAR_MIN))
+  local n = core.satsBars(sats)
+  for i = 1, SATS_BARS do
+    local bh = math.max(sx(2), math.floor(h * i / SATS_BARS))
     lcd.drawFilledRectangle(x + (i - 1) * (BAR_W + BAR_GAP), y + h - bh, BAR_W, bh,
       (i <= n) and col or COLORS.track)
   end
@@ -468,10 +463,30 @@ local function dopText(dop)
   if dop < 9.95 then return string.format("%.1f", dop) end
   return string.format("%d", math.min(99, math.floor(dop + 0.5)))
 end
--- Colour stages like the sats, from the core's DOP stage.
+-- Colour of a core level (0 ok, 1 warning, 2 critical): the big value, its bars
+-- and the status accent, yellow or red; small values text colour, yellow or red.
+-- Levels come from the core, the widget never compares thresholds itself.
+local function levelColor(level)
+  if level == nil then return COLORS.fg end   -- no level: neutral
+  if level == 2 then return CRIT_COL end
+  if level == 1 then return WARN_COL end
+  return COLORS.accent
+end
+-- A colour level from the core, guarded: a failing level function leaves only
+-- that value in its neutral colour instead of breaking the whole tile.
+local function lvl(f, ...)
+  local ok, v = pcall(f, ...)
+  if ok then return v end
+end
+local function smallColor(level)
+  if level == 2 then return CRIT_COL end
+  if level == 1 then return WARN_COL end
+  return COLORS.fg
+end
+
+-- DOP (small value) from the core's DOP stage.
 local function dopColor(dop, kind)
-  local s = core.dopStage(dop, kind)
-  return (s == 0 and COLORS.accent) or (s == 1 and WARN_COL) or CRIT_COL
+  return smallColor(lvl(core.dopStage, dop, kind))
 end
 
 -- Column width from fixed references (not the live text) so it never jumps.
@@ -496,15 +511,10 @@ local function listValue(r, d)
   return string.format("%.1f", d.gspd)
 end
 
--- Sats colour by bar stage: <= 1 bar or debounced fix loss red, 2 bars yellow,
--- 3+ bars green (palette accent). Count and bars share it.
+-- Sats colour from the core's sats level (bar stage, fix loss red). Count and
+-- bars share it.
 local function satsColor(sats, fixLost)
-  if fixLost then return CRIT_COL end
-  if not sats then return COLORS.fg end   -- missing value: neutral, not 0 sats
-  local n = satsBars(sats)
-  if n <= 1 then return CRIT_COL end
-  if n == 2 then return WARN_COL end
-  return COLORS.accent
+  return levelColor(lvl(core.satsLevel, sats, fixLost))   -- missing value: neutral, not 0 sats
 end
 
 -- Sats block: count, caption LABEL_GAP behind it (moves with the digit count,
@@ -527,9 +537,9 @@ end
 -- One list row: label left, value (+ unit) right-aligned; red over its Max limit.
 local function drawRow(x0, y, colW, r, d)
   local v = listValue(r, d)
-  local over = (r.key == "alt" and d.altOver) or (r.key == "dist" and d.distOver)
+  local over = (r.key == "alt" and d.altOver) or (r.key == "dist" and d.distOver) or false
   dtext(x0, y, r.label, COLORS.muted, LIST_FONT)
-  drawValueUnit(x0 + colW - valueUnitW(v, r.unit, LIST_FONT), y, v, r.unit, over and CRIT_COL or COLORS.fg, LIST_FONT)
+  drawValueUnit(x0 + colW - valueUnitW(v, r.unit, LIST_FONT), y, v, r.unit, smallColor(lvl(core.limitLevel, over)), LIST_FONT)
 end
 
 -- Rows sit in equal bands stacked up from the bottom edge (`bottom` = tile
@@ -744,7 +754,7 @@ local function drawActiveMedium(W, H, x0, y0, d)
   drawHeader(x0, y0)
   local smlH    = fontH(SMLSIZE)
   local span    = H - smlH
-  local minSpan = 4 * (smlH - sx(4))
+  local minSpan = 4 * (smlH - sx(5))   -- the pitch activeFitsMedium allows
   if span < minSpan then span = minSpan end
   local function rowY(i) return y0 + math.floor(i * span / 4 + 0.5) end
   local top  = rowY(1)
@@ -804,32 +814,23 @@ end
 -- on the live tile, rows evenly spread below the header.
 -- ---------------------------------------------------------------------------
 
--- Colour of a check level: 0 accent, 1 yellow, 2 red.
-local function levelColor(level)
-  if level == 2 then return CRIT_COL end
-  if level == 1 then return WARN_COL end
-  return COLORS.accent
-end
-
 -- Seconds left on a page timer that started at `since` (the core's ms clock,
 -- getTime() * 10) and runs `total` ms.
 local function secsLeft(since, total)
   return math.max(0, math.ceil((total - (getTime() * 10 - since)) / 1000))
 end
 
--- Countdown at the bottom right: text left of a bar that runs empty. The text
--- shrinks to the seconds when the row is too narrow.
-local function drawCountdown(x0, W, y, secs, total, label)
+-- Countdown at the bottom right: the seconds left of a bar that runs empty.
+local function drawCountdown(x0, W, y, secs, total)
   local smlH = fontH(SMLSIZE)
   local barH = math.max(3, sx(6))
-  local barW = math.max(sx(30), math.floor(W * 0.35))
+  local barW = math.max(sx(30), math.floor(W * 0.26))
   local bx   = x0 + W - barW
   local by   = y + math.floor((smlH - barH) / 2)
   lcd.drawFilledRectangle(bx, by, barW, barH, COLORS.track)
   local fw = math.floor(barW * math.max(0, math.min(1, secs / total)))
   if fw > 0 then lcd.drawFilledRectangle(bx, by, fw, barH, COLORS.muted) end
-  local txt = string.format("%s in %d s", label, secs)
-  if textW(txt, SMLSIZE) > bx - sx(6) - x0 then txt = string.format("%d s", secs) end
+  local txt = string.format("%d s", secs)
   dtext(bx - sx(6) - textW(txt, SMLSIZE), y, txt, COLORS.muted, SMLSIZE)
 end
 
@@ -842,6 +843,9 @@ local function drawStatusLine(x, y, st)
   dtext(x + 2 * r + sx(4), y, st.text, col, SMLSIZE)
   return 2 * r + sx(4) + textW(st.text, SMLSIZE)
 end
+local function statusLineW(st)
+  return 2 * math.max(2, sx(4)) + sx(4) + textW(st.text, SMLSIZE)
+end
 
 -- Rows evenly spread below the header like MEDIUM (header = row 0, n rows, the
 -- last at the bottom pad); the pitch never drops below a compressed line.
@@ -853,75 +857,78 @@ local function rowSpread(H, y0, n)
   return function(i) return y0 + math.floor(i * span / n + 0.5) end
 end
 
--- Muted label followed by its value.
-local function drawKV(x, y, label, value, col)
-  dtext(x, y, label, COLORS.muted, SMLSIZE)
-  dtext(x + textW(label, SMLSIZE), y, value, col or COLORS.fg, SMLSIZE)
-end
-
--- Preflight page: satellites big (font box sized for "0.00V") with SATS and the bars as on the live view, then DOP and fix
--- type, the GPS status and the countdown to the flight page while the check
--- is met. Status and countdown rows are fixed, the countdown row stays empty
--- while it does not run, so nothing moves. Smaller zones keep sats, DOP/fix,
--- status and countdown as far as they fit (two rows: sats and status), the
--- shortest only the sats.
+-- Preflight page in the live tile's rows: the sats block as on the live view,
+-- then DOP, fix type and the GPS status with the countdown to the flight page
+-- (seconds only) where the live view has ALT, DIST and SPD; DOP and fix in the
+-- live view's column width, the status over the full width. Small zones keep
+-- the sats and the status, the shortest only the sats.
 local function drawPre(W, H, x0, y0, r, state)
   local smlH   = fontH(SMLSIZE)
   local col    = satsColor(r.sats, r.fixLost)
   local satTxt = r.sats and tostring(r.sats) or "--"
   local st     = core.preflight(core.fixState(r), r.dop, r.dopKind)
   local secs   = state.readySince and secsLeft(state.readySince, core.PRE_HOLD_T)
-  -- rows below the header at the compressed pitch
-  local nRows  = math.floor((H - smlH) / (smlH - sx(4)))
-  if nRows < 1 then
-    local f = fitFont(satTxt .. " SATS", W, H)
-    dtext(x0, y0 + math.floor((H - fontH(f)) / 2), satTxt .. " SATS", col, f)
-    return
+  local colW = W   -- the live view's list column, set per tier
+  local function lr(y, label, value, vcol)
+    dtext(x0, y, label, COLORS.muted, SMLSIZE)
+    dtext(x0 + colW - textW(value, SMLSIZE), y, value, vcol or COLORS.fg, SMLSIZE)
   end
-  drawHeader(x0, y0)
-  local bottomY = y0 + H - smlH
-  local half    = math.floor(W / 2)
-  local function countdown(y)
-    if secs then drawCountdown(x0, W, y, secs, core.PRE_HOLD_T / 1000, "Flight page") end
-  end
-  local function infoRow(y)
-    drawKV(x0, y, (r.dopKind or "PDOP") .. " ", r.dop and dopText(r.dop) or "--",
-           r.dop and dopColor(r.dop, r.dopKind))
-    drawKV(x0 + half, y, "FIX ", r.fix or "--")
-  end
+  local rows = {   -- drawn at the live view's ALT, DIST and SPD rows
+    function(y) lr(y, r.dopKind or "PDOP", r.dop and dopText(r.dop) or "--", r.dop and dopColor(r.dop, r.dopKind)) end,
+    function(y) lr(y, "FIX", r.fix or "--", smallColor(lvl(core.fixLevel, r.fix))) end,
+    function(y)
+      drawStatusLine(x0, y, st)
+      if secs then drawCountdown(x0, W, y, secs, core.PRE_HOLD_T / 1000) end
+    end,
+  }
 
-  if not activeFitsFull(W, H) then
-    local k    = (activeFitsMedium(W, H) and nRows >= 4) and 4 or math.min(3, nRows)
-    local rowY = rowSpread(H, y0, k)
-    local top  = rowY(1)
-    local bf   = fitFont("99", math.floor(W * 0.5), (k >= 2 and rowY(2) or y0 + H) - sx(2) - top, MIDSIZE)
-    drawSatsBlock(x0, top, math.min(W, satsBlockW(bf)), bf, r)   -- bars right behind SATS
-    if k == 4 then
-      infoRow(rowY(2))
-      drawStatusLine(x0, rowY(3), st)
-      countdown(rowY(4))
-    else
-      -- no row of its own: the countdown joins the status line, the info row keeps its place
-      if k >= 3 then infoRow(rowY(2)) end
-      if k >= 2 then
-        local cx = x0 + drawStatusLine(x0, rowY(k), st) + sx(8)
-        if secs then drawCountdown(cx, x0 + W - cx, rowY(k), secs, core.PRE_HOLD_T / 1000, "Flight page") end
-      end
+  if activeFitsFull(W, H) then   -- as drawActiveFull
+    drawHeader(x0, y0)
+    local top = y0 + headerH()
+    colW = listColW(MIDSIZE)
+    drawSatsBlock(x0, top, colW, MIDSIZE, r)
+    local rowH = listPitch(H - headerH())
+    local y    = y0 + H - #rows * rowH + math.floor((rowH - fontH(LIST_FONT)) / 2)
+    for _, row in ipairs(rows) do row(y); y = y + rowH end
+  elseif activeFitsMedium(W, H) then   -- as drawActiveMedium
+    drawHeader(x0, y0)
+    local span    = H - smlH
+    local minSpan = 4 * (smlH - sx(5))   -- the pitch activeFitsMedium allows
+    if span < minSpan then span = minSpan end
+    local function rowY(i) return y0 + math.floor(i * span / 4 + 0.5) end
+    local top = rowY(1)
+    local bf  = fitFont("99", math.floor(W * 0.5), math.floor((rowY(3) - sx(2) - top) * 0.5), MIDSIZE)
+    colW = listColW(bf)
+    drawSatsBlock(x0, top, colW, bf, r)
+    for i, row in ipairs(rows) do row(rowY(i + 1)) end
+  else   -- header, sats and status as far as they fit
+    local nRows = math.floor((H + sx(1)) / (smlH + sx(1)))
+    if nRows <= 1 then
+      local f = fitFont(satTxt .. " SATS", W, H)
+      dtext(x0, y0 + math.floor((H - fontH(f)) / 2), satTxt .. " SATS", col, f)
+      return
     end
-    return
+    drawHeader(x0, y0)
+    local stH = (nRows >= 3) and smlH or 0
+    local top = y0 + smlH + sx(1)
+    local bf  = fitFont("99", math.floor(W * 0.5), y0 + H - top - (stH > 0 and stH + sx(1) or 0), MIDSIZE)
+    if stH > 0 then
+      drawSatsBlock(x0, top, math.min(W, satsBlockW(bf)), bf, r)   -- bars right behind SATS
+      rows[3](y0 + H - smlH)
+      return
+    end
+    -- no status row: the status right-aligned on the sats row; the bars, then SATS, go when it is tight
+    local stX  = x0 + W - statusLineW(st)
+    local base = top + fontH(bf) - smlH
+    drawStatusLine(stX, base, st)
+    if x0 + satsBlockW(bf) <= stX - sx(6) then
+      drawSatsBlock(x0, top, satsBlockW(bf), bf, r)
+    else
+      dtext(x0, top, satTxt, col, bf)
+      local capX = x0 + textW(satTxt, bf) + LABEL_GAP
+      if capX + textW("SATS", SMLSIZE) <= stX - sx(6) then dtext(capX, base, "SATS", COLORS.muted, SMLSIZE) end
+    end
   end
-
-  -- FULL: the spare height is shared out evenly between the blocks.
-  local top  = y0 + headerH()
-  local bigF = fitFont("0.00V", math.floor(W * 0.5), math.floor((bottomY - top) * 0.4))
-  local bigH = fontH(bigF)
-  drawSatsBlock(x0, top, math.min(W, listColW(bigF)), bigF, r)   -- as on the live view, bigger count
-  local fixed = bigH + 2 * smlH
-  local gap   = math.max(0, math.floor((bottomY - top - fixed) / 3))
-  local infoY = top + bigH + gap
-  infoRow(infoY)
-  drawStatusLine(x0, infoY + smlH + gap, st)
-  countdown(bottomY)
 end
 
 -- End page: the flight's highest distance, altitude and speed and the landing
@@ -933,13 +940,20 @@ local function drawEnded(W, H, x0, y0, r, state)
   local function num(v, f) return v and (string.format("%d", math.floor(v * (f or 1) + 0.5))) or "--" end
   local du   = LIST_ROWS[2].unit
   local pos  = (r.lastLat and r.lastLon) and (coord(r.lastLat) .. ", " .. coord(r.lastLon)) or "--"
-  local rows = {                          -- { order on screen, label, value, short label }
+  local rows = {                          -- { order on screen, label, value, short label, colour }
     { 4, "LAST POSITION", pos, "LAST POS" },
-    { 1, "MAX DISTANCE", num(r.maxDistM, DIST_F) .. " " .. du, "MAX DIST" },
-    { 2, "MAX ALTITUDE", num(r.maxAlt) .. " " .. LIST_ROWS[1].unit, "MAX ALT" },
+    { 1, "MAX DISTANCE", num(r.maxDistM, DIST_F) .. " " .. du, "MAX DIST", smallColor(lvl(core.limitLevel, r.distExceeded)) },
+    { 2, "MAX ALTITUDE", num(r.maxAlt) .. " " .. LIST_ROWS[1].unit, "MAX ALT", smallColor(lvl(core.limitLevel, r.altExceeded)) },
     { 3, "MAX SPEED", num(r.maxGspd) .. " " .. LIST_ROWS[3].unit, "MAX SPD" },
   }
   local n = math.floor((H - smlH) / (smlH - sx(4)))   -- compressed lines below the header
+  if n < 2 and H >= 2 * smlH - sx(4) and textW(pos, SMLSIZE) <= W then   -- header and the position, no countdown
+    drawHeader(x0, y0)
+    local lbl = textW("LAST POS", SMLSIZE) + sx(6) + textW(pos, SMLSIZE) <= W and "LAST POS"
+    if lbl then dtext(x0, y0 + H - smlH, lbl, COLORS.muted, SMLSIZE) end
+    dtext(x0 + W - textW(pos, SMLSIZE), y0 + H - smlH, pos, COLORS.fg, SMLSIZE)
+    return
+  end
   if n < 2 then
     if textW(pos, SMLSIZE) <= W or not r.lastLat then
       dtext(x0, y0 + math.floor((H - smlH) / 2), pos, COLORS.fg, SMLSIZE)
@@ -962,10 +976,10 @@ local function drawEnded(W, H, x0, y0, r, state)
     if textW(lbl, SMLSIZE) + sx(6) + vw <= W then                   -- a narrow zone keeps the value only
       dtext(x0, rowY(i), lbl, COLORS.muted, SMLSIZE)
     end
-    dtext(x0 + W - vw, rowY(i), row[3], COLORS.fg, SMLSIZE)
+    dtext(x0 + W - vw, rowY(i), row[3], row[5] or COLORS.fg, SMLSIZE)
   end
   drawCountdown(x0, W, rowY(k + 1), secsLeft(state.endedAt or 0, core.ENDED_HOLD_T),
-                core.ENDED_HOLD_T / 1000, "Wait page")
+                core.ENDED_HOLD_T / 1000)
 end
 
 -- ---------------------------------------------------------------------------
