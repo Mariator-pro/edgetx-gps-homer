@@ -2,7 +2,7 @@
 
 ![edgetx-gps-homer: EdgeTX Lua widget showing direction and distance to home](docs/banner.png)
 
-GPS Homer puts a **home arrow on your radio**: a small EdgeTX widget that shows **which way home is and how far away it is**, using the GPS data your flight controller already sends. On top of that the radio tells you by voice when the GPS is ready, when home has been set, when the GPS signal is lost or back and, if you set a limit, when the model flies too high.
+GPS Homer puts a **home arrow on your radio**: a small EdgeTX widget that shows **which way home is and how far away it is**, using the GPS data your flight controller already sends. On top of that the radio tells you by voice when the GPS is ready, when home has been set, when the GPS signal is lost or back and, if you set a limit, when the model flies too high or too far.
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![EdgeTX](https://img.shields.io/badge/EdgeTX-%E2%89%A5%202.11-brightgreen)](https://edgetx.org)
@@ -20,7 +20,6 @@ GPS Homer puts a **home arrow on your radio**: a small EdgeTX widget that shows 
 - [🧰 Requirements](#-requirements)
 - [🧩 Script variants](#-script-variants)
 - [📥 Installation](#-installation)
-- [⚙️ Customizing](#️-customizing)
 - [🛠️ Troubleshooting](#️-troubleshooting)
 - [🤝 Contributing](#-contributing)
 - [⚠️ Disclaimer](#️-disclaimer)
@@ -64,7 +63,7 @@ Everything happens automatically:
 - **Home is set on its own, like on the flight controller.** Once the GPS fix is stable the radio says "Ready to fly"; when you arm, home is stored and the radio says "Home set".
 - **Voice only when it matters:** ready to fly, home set, GPS lost, GPS back and optional maximum altitude and distance warnings. Each event can be muted or replaced with your own sound.
 - **Standing still or hovering slowly?** The compass ring turns north up and a house on it marks the direction to home (`SW 220°`), since there is no flight direction yet.
-- **Hovering after a fast straight line:** the arrow stays and turns with the nose (`HOME ~30 R`), for up to 60 s.
+- **Hovering after a fast straight line:** with the `Yaw` sensor the arrow stays and turns with the nose (`HOME ~30 R`), for up to 60 s.
 - **Lost the link?** The widget keeps showing the **last known GPS position** of the model to help you find it.
 
 Besides the flight view above, the widget shows a page for each other phase of a flight:
@@ -87,13 +86,14 @@ Besides the flight view above, the widget shows a page for each other phase of a
 ## 🧰 Requirements
 
 - A radio running **EdgeTX 2.11 or newer**. For the widget the radio needs a color display; for voice announcements only, any EdgeTX radio will do (see [Script variants](#-script-variants)).
-- A **Betaflight, INAV or ArduPilot flight controller with a GPS module**, with GPS telemetry enabled. INAV and ArduPilot support is derived from their source code and not flight-tested yet; ArduPilot needs one extra setting, see [`docs/compatibility.md`](docs/compatibility.md#setup).
-- An **ExpressLRS receiver (3.0 or newer)** with telemetry enabled. For other RC links see [`docs/compatibility.md`](docs/compatibility.md).
+- A **Betaflight, INAV or ArduPilot flight controller with a GPS module**, with GPS telemetry enabled. INAV and ArduPilot support is derived from their source code and not flight-tested yet.
+- An **ExpressLRS receiver (3.0 or newer)** with telemetry enabled.
 - The GPS data must be known to the radio as telemetry sensors. They appear on their own when you run a **telemetry discovery** (Model Settings → Telemetry → "Discover new sensors") while the GPS has a fix:
   - **Required:** `GPS` (position), `Sats` (satellite count), `GSpd` (ground speed), `Hdg` (course over ground). A lost link is detected by the radio itself, no sensor needed.
   - **Optional:**
     - `FM` (flight mode): sets home at arming; without it, home is set at the first stable fix
     - `GAlt` or `Alt` (GAlt preferred): altitude above home, for the display, the flight's maximum on the end page and the Max altitude warning
+    - `Yaw` (nose direction from the flight controller, CRSF only): keeps the arrow while hovering after a fast straight line
 
 ---
 
@@ -164,13 +164,13 @@ SOUNDS/
         └── GPSHOMER/       ← all .wav files
 ```
 
-All files sit in the same folders in this repository. The sound files always live under `/SOUNDS/en/SCRIPTS/GPSHOMER/`, no matter which language your radio is set to.
+All files sit in the same folders under `src/` in this repository. The sound files always live under `/SOUNDS/en/SCRIPTS/GPSHOMER/`, no matter which language your radio is set to.
 
-Two more files show up in `/SCRIPTS/GPSHOMER/` later, written by the radio itself and nothing you copy: `config.lua` holds your settings once you save them in the tool, and `flights.lua` holds the last known position of the last three flights.
+Two more files show up in `/SCRIPTS/GPSHOMER/` later, written by the radio itself and nothing you copy: `config.lua` holds your settings once you save them in Flight Bag, and `flights.lua` holds the last known position of the last three flights.
 
 ### 2a. Set up the widget
 
-1. Open the model's **Telemetry / Display** setup (the page where you arrange the widget screens).
+1. Open the model's **Screens** setup (the page where you arrange the widget screens).
 2. Pick a free zone, add a widget and choose **GPS Homer** from the list.
 3. *(Optional)* Open the widget settings to adjust the look:
    - **Theme**: `Dark` or `Light`.
@@ -200,43 +200,26 @@ For radios without a color display, or if you only want the voice announcements:
 ### 3. Try it out
 
 - Power the model and wait for the GPS fix. The radio's telemetry page should show values for `GPS`, `Sats`, `GSpd` and `Hdg`.
-- The widget shows the preflight page: satellites, GPS accuracy (PDOP or HDOP) and fix with `NO FIX` / `FIX SETTLING`. Once the fix is stable, the radio says "Ready to fly" and the page shows `GPS READY` with a countdown beside it, 15 s to the live view (arming switches at once).
+- The widget shows the preflight page: satellites, GPS accuracy (PDOP or HDOP) and the fix status (`NO FIX`, `FIX SETTLING`). Once the fix is stable, the radio says "Ready to fly" and the page shows `GPS READY` with a countdown beside it, 15 s to the live view (arming switches at once).
 - Arm the model: the radio says "Home set". Fly away: the distance grows and the arrow points back home.
-- Switch the model off: the widget shows the end page with the flight's highest distance, altitude and speed and its last position for 30 s. The coordinates stay in the flight log, see **Last flights** in Flight Bag.
+- Switch the model off: the widget shows the end page with the flight's highest distance, altitude and speed and its last position for 30 s. The coordinates stay in the flight log, see **Last flights** in [Flight Bag](https://github.com/Mariator-pro/edgetx-flight-wingman/blob/main/docs/flightbag.md#last-flights).
 - With the function script you only hear the announcements.
 
----
+### 4. Settings
 
-## ⚙️ Customizing
-
-Settings are made in **Flight Bag**, a settings tool shared by several EdgeTX scripts. Copy its files (see the file tree above) and open **SYS → Tools → Flight Bag**. After **Save**, changes apply within a few seconds for both variants, no restart needed.
-
-GPS Homer's rows sit under the heading **GPS Homer**:
-
-- **Warnings**
-  - **Minimum satellites**: how many satellites must be locked before home is set. **4-20** (default 6). Higher gives a more accurate home but sets it a little later.
-  - **Max altitude**: `Off` (default) or **10-500** in steps of 10, in the unit of your altitude sensor. Above this height over home the radio says "Maximum altitude" once, and again only after the model has dropped 10 below the limit. With the default ELRS telemetry ratio the altitude arrives only every few seconds, so the warning can come a little late. While above, ALT on the widget turns red.
-  - **Max distance**: `Off` (default) or **100-5000** in steps of 100, in m or ft (the radio's units). Farther than this from home the radio says "Maximum distance" once, and again only after the model has come 100 closer. While farther, DIST on the widget turns red.
-- **Alerts**
-  - **Sounds**, **Vibration**, **Strength**: shared by all Flight Bag scripts. `Sounds Off` silences every GPS Homer announcement. Vibration (off by default) gives two pulses for GPS lost, Max altitude and Max distance and one for every other event, independent of the sound. These three warnings also switch a dimmed display back on.
-  - **Ready to fly**, **Home set**, **GPS lost**, **GPS recovered**, **Max altitude**, **Max distance**: the sound per event: `Off`, `Default` or any `.wav` you put into `/SOUNDS/en/SCRIPTS/GPSHOMER/`. **Play** previews it.
-- **Last flights**: where the model was when the telemetry ended, for the last three flights, with date, time, model name, coordinates and a **QR code**. Scan it with a phone and the map app opens on that spot.
-
-Units follow the radio's own setting (**SYS → Radio setup → Units**: metric gives m and km/h, imperial ft and mph). Set the units of the altitude and speed sensors on the radio to match.
-
-Tap the **GPS Homer** icon for **Reset settings** (the flight list stays), **Clear flights**, **Factory reset** (both) and the version. A warning sign on the icon means something needs attention (for example no settings file yet); the popup says what to do.
+Thresholds, sounds and vibration are set in **Flight Bag**, the settings tool shared by several EdgeTX scripts (**SYS → Tools → Apps → Flight Bag**). All pages and rows are described in the [Flight Bag guide](https://github.com/Mariator-pro/edgetx-flight-wingman/blob/main/docs/flightbag.md). After **Save**, changes apply within a few seconds for both variants, no restart needed.
 
 ---
 
 ## 🛠️ Troubleshooting
 
-- **Widget shows "Configuration error / Please check Tool Flight Bag":** One of the required sensors (`GPS`, `Sats`, `GSpd`, `Hdg`) has never been discovered. Open **Tools → Flight Bag** and tap the GPS Homer icon (it carries a warning sign): the popup names the sensor. Enable GPS telemetry on the flight controller, then run a telemetry discovery on the radio while the GPS has a fix.
+- **Widget shows "Configuration error / Please check Tool Flight Bag":** One of the required sensors (`GPS`, `Sats`, `GSpd`, `Hdg`) has never been discovered. Open **SYS → Tools → Apps → Flight Bag** and tap the GPS Homer icon (it carries a warning sign): the popup names the sensor. Enable GPS telemetry on the flight controller, then run a telemetry discovery on the radio while the GPS has a fix.
 - **Preflight page stays on `NO FIX` or `FIX SETTLING`:** Not enough satellites yet, or the fix keeps dropping. Give the GPS a clear view of the sky, away from buildings and the car.
 - **Widget shows `NO HOME` after arming, no "Home set" was spoken:** You armed before the GPS had enough satellites, so there is no home point for this flight. Land, disarm, wait for "Ready to fly" and arm again.
 - **"Ready to fly" and "Home set" always come together, before arming:** The radio does not know when the model is armed because the `FM` sensor is missing. Run a telemetry discovery to add it; until then home is stored at the first stable fix, and the model must not move before that. Some flight controllers need an extra setting for this, see [`docs/compatibility.md`](docs/compatibility.md#setup).
-- **No arrow, only a direction like "SW 220°":** The model is moving slower than 6 km/h, so the GPS cannot tell the flight direction yet. The arrow appears as soon as you fly. After 2 s straight at 25 km/h or more it also stays while hovering, for up to 60 s.
+- **No arrow, only a direction like "SW 220°":** The model is moving slower than 6 km/h, so the GPS cannot tell the flight direction yet. The arrow appears as soon as you fly. With the `Yaw` sensor it also stays while hovering after 2 s straight at 25 km/h or more, for up to 60 s.
 - **No voice at all:** Check that the `.wav` files really are in `/SOUNDS/en/SCRIPTS/GPSHOMER/` (the `en` folder is required even if your radio uses another language). The quickest check is Flight Bag: on the **Alerts** page dive into an event and press **Play**.
-- **A screen reports a missing file:** Copy the folders from this repository again, the file tree above lists everything that belongs on the card.
+- **A screen reports a missing file:** Copy the folders from `src/` in this repository again, the file tree above lists everything that belongs on the card.
 
 ---
 
