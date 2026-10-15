@@ -427,9 +427,16 @@ local LABEL_GAP = sx(6)
 -- not valid before the first frame.
 local function headerH() return fontH(SMLSIZE) + sx(1) end
 
--- Signal-style bars: five bars of rising height, filled up to the core's bar
--- count for the sats (its thresholds), track colour when empty.
-local SATS_BARS = 5
+-- A colour level (or the bar count) from the core, guarded: a failing level
+-- function leaves only that value neutral instead of breaking the whole tile.
+local function lvl(f, ...)
+  local ok, v = pcall(f, ...)
+  if ok then return v end
+end
+
+-- Signal-style bars of rising height, one per core threshold, filled up to the
+-- core's bar count for the sats, track colour when empty.
+local SATS_BARS = core and core.SATS_BAR_MIN and #core.SATS_BAR_MIN or 5
 -- Digits inside a text box (shares of its reported height, which includes generous
 -- line spacing): baseline and digit height, measured for SMLSIZE to XXLSIZE in the
 -- TX15 and TX16S MK3 simulators (baseline 0.76 to 0.79, height 0.53 to 0.68: the
@@ -438,7 +445,7 @@ local CAP_BASE, CAP_H = 0.778, 0.54
 local BAR_W, BAR_GAP = sx(3), sx(1)
 local BARS_W = SATS_BARS * (BAR_W + BAR_GAP) - BAR_GAP
 local function drawSatsBars(x, y, h, sats, col)
-  local n = core.satsBars(sats)
+  local n = lvl(core.satsBars, sats) or 0   -- guarded like the levels
   for i = 1, SATS_BARS do
     local bh = math.max(sx(2), math.floor(h * i / SATS_BARS))
     lcd.drawFilledRectangle(x + (i - 1) * (BAR_W + BAR_GAP), y + h - bh, BAR_W, bh,
@@ -471,12 +478,6 @@ local function levelColor(level)
   if level == 2 then return CRIT_COL end
   if level == 1 then return WARN_COL end
   return COLORS.accent
-end
--- A colour level from the core, guarded: a failing level function leaves only
--- that value in its neutral colour instead of breaking the whole tile.
-local function lvl(f, ...)
-  local ok, v = pcall(f, ...)
-  if ok then return v end
 end
 local function smallColor(level)
   if level == 2 then return CRIT_COL end
@@ -1010,7 +1011,7 @@ local function drawTile(ctx, z, x0, y0, W, H)
   end
 
   local ph, gs = r.phase, r.gpsState
-  local linkUp = r.snapshot and r.snapshot.telem   -- heartbeat only while packets arrive
+  local linkUp = r.linkUp   -- heartbeat only while packets arrive (core)
   if ph == "ENDED" then
     drawEnded(W, H, x0, y0, r, ctx.state)
   elseif ph == "PRE" then
