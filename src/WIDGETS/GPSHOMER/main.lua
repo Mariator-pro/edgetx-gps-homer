@@ -63,6 +63,7 @@ local DARK = {
   fg     = lcd.RGB(235, 235, 235),
   muted  = lcd.RGB(150, 150, 150),
   track  = lcd.RGB( 55,  58,  55),
+  face   = lcd.RGB( 27,  30,  27),   -- compass dial
   accent = lcd.RGB(124, 210,  48),
 }
 local LIGHT = {
@@ -71,6 +72,7 @@ local LIGHT = {
   fg     = lcd.RGB(  0,   0,   0),
   muted  = lcd.RGB( 90,  90,  90),
   track  = lcd.RGB(200, 200, 205),
+  face   = lcd.RGB(235, 235, 240),   -- compass dial
   accent = lcd.RGB(  1, 152,   8),
 }
 local CRIT_COL = lcd.RGB(220,  40,  40)  -- red: sats bar stage <= 1, fix loss, errors
@@ -380,7 +382,7 @@ local function drawCrosshair(cx, cy, r, col) compass.crosshair(cx, cy, r, RING_W
 -- course. 2 North up = map style, the ring is fixed, the arrow is the course
 -- and a house on the ring marks home. Drawing in the shared compass.lua.
 local NORTH_UP = false
-local function compassColors() return { track = COLORS.track, fg = COLORS.fg, muted = COLORS.muted } end
+local function compassColors() return { track = COLORS.track, fg = COLORS.fg, muted = COLORS.muted, face = COLORS.face } end
 local function drawCompassArrow(cx, cy, R, d, compact)
   compass.draw(cx, cy, R, { course = d.courseValid and (d.course or 0) or nil, rel = d.rel,
                             bearing = d.bearingToHome }, NORTH_UP, compact, compassColors())
