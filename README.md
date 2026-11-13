@@ -150,6 +150,7 @@ SCRIPTS/
 │   ├── core.lua            ← shared logic
 │   ├── compass.lua         ← compass drawing
 │   ├── manifest.lua        ← Flight Bag settings
+│   ├── lang/               ← Flight Bag texts (English, German)
 │   └── qr.lua              ← QR code in Flight Bag
 ├── FUNCTIONS/
 │   └── gpshom.lua          ← function script
